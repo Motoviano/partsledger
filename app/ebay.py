@@ -350,3 +350,101 @@ def deletion_challenge(code):
     c = cfg()
     endpoint = c["PUBLIC_URL"].rstrip("/") + "/ebay/account-deletion"
     return hashlib.sha256((code + c["EBAY_VERIFICATION_TOKEN"] + endpoint).encode()).hexdigest()
+
+
+# ------------------------------------------------------------------ Promoted Listings (Marketing API)
+MKT = "https://api.ebay.com/sell/marketing/v1"
+CAMPAIGN_NAME = "Partsledger General"
+
+SCHEMA += """
+CREATE TABLE IF NOT EXISTS ad_rates(
+  account_id INTEGER NOT NULL, item_id TEXT NOT NULL, rate REAL NOT NULL, sku TEXT, title TEXT,
+  status TEXT DEFAULT 'pending', message TEXT, updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(account_id, item_id));
+"""
+
+
+def _rest(method, url, token, body=None):
+    data = json.dumps(body).encode() if body is not None else None
+    st, raw = _http(url, data, {"Authorization": "Bearer " + token, "Content-Type": "application/json",
+                                "Accept": "application/json", "Content-Language": "en-GB"}, method)
+    try:
+        j = json.loads(raw) if raw else {}
+    except ValueError:
+        j = {}
+    return st, j
+
+
+def _err(j, fallback):
+    es = j.get("errors") or []
+    return "; ".join(e.get("longMessage") or e.get("message") or str(e.get("errorId")) for e in es) or fallback
+
+
+def find_or_create_campaign(token):
+    st, j = _rest("GET", MKT + "/ad_campaign?" + urllib.parse.urlencode({"campaign_name": CAMPAIGN_NAME}), token)
+    for c in (j.get("campaigns") or []):
+        if c.get("campaignName") == CAMPAIGN_NAME and c.get("campaignStatus") not in ("ENDED", "DELETED"):
+            return c["campaignId"]
+    start = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 60))
+    body = {"campaignName": CAMPAIGN_NAME, "marketplaceId": "EBAY_GB", "startDate": start,
+            "fundingStrategy": {"fundingModel": "COST_PER_SALE", "bidPercentage": "5.0"}}
+    st, j = _rest("POST", MKT + "/ad_campaign", token, body)
+    if st not in (200, 201):
+        raise EbayError("Couldn't create the Promoted Listings campaign: " + _err(j, str(st)))
+    st, j = _rest("GET", MKT + "/ad_campaign?" + urllib.parse.urlencode({"campaign_name": CAMPAIGN_NAME}), token)
+    for c in (j.get("campaigns") or []):
+        if c.get("campaignName") == CAMPAIGN_NAME:
+            return c["campaignId"]
+    raise EbayError("The campaign was created but couldn't be found again. Try once more.")
+
+
+def apply_ad_rates(token, rows):
+    """rows: [(item_id, rate)]. Adds each listing to the campaign, or updates its rate if it's already there.
+    Returns {item_id: (ok, message)}."""
+    cid = find_or_create_campaign(token)
+    out = {}
+    for i in range(0, len(rows), 500):
+        chunk = rows[i:i + 500]
+        reqs = [{"listingId": it, "bidPercentage": f"{r:.1f}"} for it, r in chunk]
+        st, j = _rest("POST", f"{MKT}/ad_campaign/{cid}/bulk_create_ads_by_listing_id", token, {"requests": reqs})
+        if st >= 400 and not j.get("responses"):
+            for it, _ in chunk:
+                out[it] = (False, _err(j, f"eBay error {st}"))
+            continue
+        retry = []
+        for resp in j.get("responses", []):
+            it = str(resp.get("listingId"))
+            if resp.get("statusCode") in (200, 201):
+                out[it] = (True, "Promoted at {:.1f}%".format(dict(chunk)[it]))
+            else:
+                msg = _err(resp, "not added")
+                if "already" in msg.lower() and "campaign" in msg.lower():
+                    retry.append(it)
+                out[it] = (False, msg)
+        if retry:
+            reqs = [{"listingId": it, "bidPercentage": f"{dict(chunk)[it]:.1f}"} for it in retry]
+            st, j = _rest("POST", f"{MKT}/ad_campaign/{cid}/bulk_update_ads_bid_by_listing_id", token, {"requests": reqs})
+            for resp in j.get("responses", []):
+                it = str(resp.get("listingId"))
+                if resp.get("statusCode") in (200, 201, 204):
+                    out[it] = (True, "Rate updated to {:.1f}%".format(dict(chunk)[it]))
+    return out
+
+
+def run_ad_job(db_factory, account_id):
+    with _lock:
+        with db_factory() as con:
+            rows = [(r["item_id"], r["rate"]) for r in con.execute(
+                "SELECT item_id,rate FROM ad_rates WHERE account_id=? AND status IN ('pending','failed')", (account_id,))]
+            con.execute("UPDATE ad_rates SET status='working', message=NULL WHERE account_id=? AND status IN ('pending','failed')", (account_id,))
+        try:
+            with db_factory() as con:
+                tok = access_token(con, account_id)
+            res = apply_ad_rates(tok, rows)
+        except Exception as e:
+            res = {it: (False, str(e)[:500]) for it, _ in rows}
+        with db_factory() as con:
+            for it, _ in rows:
+                ok, msg = res.get(it, (False, "No answer from eBay for this listing"))
+                con.execute("UPDATE ad_rates SET status=?, message=?, updated_at=CURRENT_TIMESTAMP WHERE account_id=? AND item_id=?",
+                            ("done" if ok else "failed", msg, account_id, it))

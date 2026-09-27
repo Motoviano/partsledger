@@ -475,6 +475,60 @@ def ebay_job(job_id: int, request: Request):
         return {"job": dict(j), "items": [dict(r) for r in con.execute("SELECT * FROM ebay_job_items WHERE job_id=? ORDER BY id", (job_id,))]}
 
 
+# ------------------------------------------------------------------ Promoted Listings ad rates
+@app.post("/api/ebay/adrates")
+async def ebay_adrates_upload(request: Request, file: UploadFile = File(...)):
+    u = need_user(request)
+    raw = await file.read()
+    import io
+    import pandas as pd
+    name = (file.filename or "").lower()
+    df = pd.read_excel(io.BytesIO(raw), dtype=str) if name.endswith((".xlsx", ".xls")) else pd.read_csv(io.StringIO(IM.decode(raw)), dtype=str)
+    cols = {c.strip().lower(): c for c in df.columns}
+    acc_c = next((cols[k] for k in cols if k.startswith("account")), None)
+    item_c = next((cols[k] for k in cols if k in ("item number", "item id", "itemid", "ebay item id")), None)
+    rate_c = next((cols[k] for k in cols if "rate" in k), None)
+    if not (acc_c and item_c and rate_c):
+        raise HTTPException(400, "The file needs Account, Item number and Ad rate columns.")
+    with DB.db() as con:
+        accs = {r["name"].lower(): r["id"] for r in con.execute("SELECT id,name FROM accounts WHERE channel='ebay'")}
+        n, bad = 0, 0
+        for _, r in df.iterrows():
+            a = accs.get(str(r[acc_c]).strip().lower())
+            item = str(r[item_c]).strip().replace('="', "").replace('"', "")
+            try:
+                rate = float(str(r[rate_c]).replace("%", "").strip())
+            except ValueError:
+                rate = None
+            if not a or not item or rate is None or not (2 <= rate <= 100):
+                bad += 1
+                continue
+            info = con.execute("SELECT sku,title FROM listings WHERE account_id=? AND item_id=?", (a, item)).fetchone()
+            con.execute("""INSERT INTO ad_rates(account_id,item_id,rate,sku,title,status) VALUES(?,?,?,?,?,'pending')
+                           ON CONFLICT(account_id,item_id) DO UPDATE SET rate=excluded.rate,status='pending',message=NULL,updated_at=CURRENT_TIMESTAMP""",
+                        (a, item, round(rate, 1), info["sku"] if info else None, info["title"] if info else None))
+            n += 1
+    return {"ok": True, "saved": n, "skipped": bad}
+
+
+@app.get("/api/ebay/adrates")
+def ebay_adrates(request: Request):
+    need_user(request)
+    with DB.db() as con:
+        return [dict(r) for r in con.execute("""SELECT r.*, a.name AS account FROM ad_rates r JOIN accounts a ON a.id=r.account_id
+                                                ORDER BY a.sort, r.status, r.sku""")]
+
+
+@app.post("/api/ebay/adrates/apply/{account_id}")
+def ebay_adrates_apply(account_id: int, request: Request):
+    need_user(request)
+    with DB.db() as con:
+        EB.access_token(con, account_id)
+    import threading
+    threading.Thread(target=EB.run_ad_job, args=(DB.db, account_id), daemon=True).start()
+    return {"ok": True}
+
+
 # eBay requires every app to accept "marketplace account deletion" notices.
 # We don't keep buyer names or addresses, so there is nothing to delete; we confirm receipt.
 @app.get("/ebay/account-deletion")
@@ -491,3 +545,8 @@ async def ebay_deletion_notice(request: Request):
 @app.exception_handler(HTTPException)
 async def http_err(request: Request, exc: HTTPException):
     return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
+
+
+@app.exception_handler(EB.EbayError)
+async def ebay_err(request: Request, exc: EB.EbayError):
+    return JSONResponse({"error": str(exc)}, status_code=400)

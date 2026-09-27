@@ -119,3 +119,10 @@ Use **Check selected** first: it asks eBay to validate the listing without creat
 5. In Partsledger → **eBay** → **Connect** next to each account, and sign in to eBay **as that account**.
    The app refuses a login that doesn't match the account (so you can't connect Newgates19uk to the Autonation row by mistake).
    Logins last about 18 months; the page shows the expiry date.
+
+### Promoted Listings rates
+
+On the **eBay** page, **Upload ad rates** takes a CSV or Excel file with `Account`, `Item number` and `Ad rate (%)` columns.
+**Apply to eBay** adds each listing to a General (cost per sale) campaign called "Partsledger General" on that account,
+at its own rate, or updates the rate if the listing is already in that campaign. Listings already in another campaign are reported as failed
+with eBay's reason, so nothing else is changed. Needs the account connected (uses the `sell.marketing` permission).

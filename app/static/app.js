@@ -320,6 +320,7 @@ async function renderEbay() {
     const other = EBS.accounts.find(a => a.id != $('cpFrom').value); if (other) $('cpTo').value = other.id;
     loadPolicies();
   }
+  renderAds();
   const jobs = await api('/api/ebay/jobs'); if (jobs[0] && !$('cpJob').dataset.job) showJob(jobs[0].id);
 }
 async function loadPolicies() {
@@ -380,6 +381,26 @@ async function showJob(id) {
   const m = { ok: 'eBay account connected', declined: 'eBay connection was cancelled', notset: 'Add the eBay keys in Render first',
     wrong: `You logged in to eBay as ${q.get('got')}, which isn't this account. Log out of eBay and connect again with the right account.`, error: 'eBay said: ' + (q.get('msg') || 'error') };
   setTimeout(() => toast(m[e] || e), 600); try { history.replaceState(null, '', '/#ebay'); } catch (err) { } })();
+
+
+async function renderAds() {
+  const rows = await api('/api/ebay/adrates');
+  const by = {}; rows.forEach(r => { const a = by[r.account_id] ||= { name: r.account, n: 0, pending: 0, working: 0, done: 0, failed: 0 }; a.n++; a[r.status]++; });
+  const connected = new Set((EBS?.accounts || []).filter(a => a.connection).map(a => a.id));
+  $('adSum').innerHTML = rows.length ? `<thead><tr><th class="l">Account</th><th>Listings</th><th>Waiting</th><th>Promoted</th><th>Failed</th><th></th></tr></thead><tbody>${Object.entries(by).map(([id, a]) => `<tr>
+    <td class="l">${esc(a.name)}</td><td>${a.n}</td><td>${a.pending + a.working}</td><td>${a.done}</td><td>${a.failed}</td>
+    <td>${a.working ? 'Working…' : (a.pending || a.failed) ? (connected.has(+id) ? `<button class="btn primary" type="button" data-apply="${id}">Apply ${a.pending + a.failed} to eBay</button>` : '<span class="muted">Connect this account first</span>') : '<span class="chip k">All applied</span>'}</td></tr>`).join('')}</tbody>`
+    : '<tbody><tr><td class="empty">No ad rates uploaded yet.</td></tr></tbody>';
+  $('adRows').innerHTML = rows.some(r => r.status === 'failed') ? `<thead><tr><th class="l">Account</th><th class="l">Item</th><th class="l">SKU</th><th>Rate</th><th class="l">Why it failed</th></tr></thead><tbody>${
+    rows.filter(r => r.status === 'failed').map(r => `<tr><td class="l">${esc(r.account)}</td><td class="l">${esc(r.item_id)}</td><td class="l"><span class="sku">${esc(r.sku || '')}</span></td><td>${r.rate}%</td><td class="l prod">${esc(r.message || '')}</td></tr>`).join('')}</tbody>` : '';
+  document.querySelectorAll('[data-apply]').forEach(b => b.onclick = async () => { try { await api('/api/ebay/adrates/apply/' + b.dataset.apply, { method: 'POST' }); toast('Sending rates to eBay…'); setTimeout(renderAds, 1500); } catch (e) { toast(e.message); } });
+  if (rows.some(r => r.status === 'working')) setTimeout(renderAds, 3000);
+}
+$('adFile').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return; const fd = new FormData(); fd.append('file', f);
+  try { const r = await api('/api/ebay/adrates', { method: 'POST', body: fd }); toast(`${r.saved} ad rates saved` + (r.skipped ? `, ${r.skipped} rows skipped` : '')); renderAds(); } catch (err) { toast(err.message); }
+  e.target.value = '';
+};
 
 // ---------------------------------------------------------------- wiring
 const titles = { dash: 'Dashboard', orders: 'Sold items', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
