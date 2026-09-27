@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Log in · Partsledger</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Source+Sans+3:wght@400;600&display=swap">
+<style>
+:root{--bg:#F3F4F1;--surface:#fff;--ink:#1A1E1C;--muted:#5E6762;--line:#DDE1DB;--accent:#D26A1F;--bad:#C23B30;--bad-soft:#FBE6E3;--side:#1F2522}
+@media (prefers-color-scheme: dark){:root{color-scheme:dark;--bg:#141816;--surface:#1C211F;--ink:#E7EBE8;--muted:#A3ADA7;--line:#2E3532;--accent:#EE8A3E;--bad:#F07266;--bad-soft:#3A1C19}}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--ink);font:15px/1.45 "Source Sans 3","Segoe UI",Roboto,Arial,sans-serif;padding-inline:16px}
+form{width:100%;max-width:360px;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:26px;display:flex;flex-direction:column;gap:14px;box-shadow:0 2px 12px rgba(0,0,0,.06)}
+h1{margin:0;font:700 30px "Barlow Condensed","Arial Narrow",Arial,sans-serif;letter-spacing:.02em}
+h1 span{color:var(--accent)}
+p{margin:0;color:var(--muted);font-size:14px}
+label{display:flex;flex-direction:column;gap:5px;font-size:13px;font-weight:600;color:var(--muted)}
+input{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:9px 10px}
+input:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+button{font:inherit;font-weight:600;border:0;border-radius:6px;padding:10px;background:var(--accent);color:#fff;cursor:pointer}
+.err{background:var(--bad-soft);color:var(--bad);padding:8px 10px;border-radius:6px;font-size:14px}
+</style>
+</head>
+<body>
+<form method="post" action="/login">
+  <h1>Parts<span>ledger</span></h1>
+  <p>Motoviano eBay and Amazon profit</p>
+  <div class="err" id="err" hidden>That email and password don't match. Try again, or ask an admin to reset your password.</div>
+  <label for="email">Email<input id="email" name="email" type="email" autocomplete="username" required autofocus></label>
+  <label for="password">Password<input id="password" name="password" type="password" autocomplete="current-password" required></label>
+  <button type="submit">Log in</button>
+</form>
+<script>if(location.search.includes('error'))document.getElementById('err').hidden=false</script>
+</body>
+</html>

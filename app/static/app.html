@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Partsledger · Motoviano</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Source+Sans+3:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="app">
+  <aside>
+    <div class="brand"><b>Parts<span>ledger</span></b></div>
+    <nav id="nav">
+      <button data-page="dash"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="8" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="15" width="7" height="6" rx="1"/></svg><span>Dashboard</span></button>
+      <button data-page="orders"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Sold items</span></button>
+      <button data-page="cogs"><svg viewBox="0 0 24 24"><path d="M20 12l-8 8-9-9V3h8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg><span>COGS</span></button>
+      <button data-page="charts"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span>Charts</span></button>
+      <button data-page="uploads"><svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg><span>Uploads</span></button>
+      <button data-page="users"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5M16 4.5a3.5 3.5 0 010 7M21.5 20c-.5-2.6-1.9-4.3-3.9-5.1"/></svg><span>Users</span></button>
+    </nav>
+    <div class="side-foot" id="sideFoot"></div>
+  </aside>
+
+  <main>
+    <div class="topbar">
+      <h1 id="pageTitle">Dashboard</h1>
+      <div class="user"><span id="whoami"></span><a href="/logout">Log out</a></div>
+    </div>
+
+    <form class="filters" id="filters" onsubmit="return false">
+      <div class="f"><span class="lab" id="lAcc">Accounts</span><details class="ms" id="msAcc"><summary aria-labelledby="lAcc">All accounts</summary><div class="ms-menu" id="accMenu"></div></details></div>
+      <div class="f"><span class="lab" id="lGrp">Product groups</span><details class="ms" id="msGrp"><summary aria-labelledby="lGrp">All product groups</summary><div class="ms-menu" id="grpMenu"></div></details></div>
+      <div class="f"><label for="fPeriod">Period</label>
+        <select id="fPeriod">
+          <option value="all">All data</option>
+          <option value="tw">This week</option><option value="lw">Last week</option>
+          <option value="mtd">Month to date</option><option value="lm">Last month</option>
+          <option value="q">This quarter</option><option value="lq">Last quarter</option>
+          <option value="vq">This VAT quarter</option><option value="lvq">Last VAT quarter</option>
+          <option value="ytd">Year to date</option><option value="custom">Custom dates…</option>
+        </select></div>
+      <div class="f dates" id="customDates" hidden>
+        <div><label for="fFrom">From</label><input type="date" id="fFrom"></div>
+        <div><label for="fTo">To</label><input type="date" id="fTo"></div>
+      </div>
+      <span class="range-note" id="rangeNote"></span>
+    </form>
+
+    <section id="p-dash" data-p hidden>
+      <div class="tiles" id="tiles"></div>
+      <div class="panel" style="margin-top:18px">
+        <div class="panel-head"><div><h2>Products</h2><p id="prodSub"></p></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap"><input type="search" id="prodSearch" placeholder="Search SKU or product" aria-label="Search products"><button class="btn" type="button" id="prodCsv">Export CSV</button></div></div>
+        <div class="tbl-wrap"><table id="prodTable"></table></div>
+      </div>
+    </section>
+
+    <section id="p-orders" data-p hidden>
+      <div class="panel">
+        <div class="panel-head"><div><h2>Sold items</h2><p id="ordSub"></p></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap"><input type="search" id="ordSearch" placeholder="Search order, SKU or product" aria-label="Search sold items"><button class="btn" type="button" id="ordCsv">Export CSV</button></div></div>
+        <div class="tbl-wrap"><table id="ordTable"></table></div>
+        <div class="more"><button class="btn" id="ordMore" type="button">Show more</button></div>
+      </div>
+    </section>
+
+    <section id="p-cogs" data-p hidden>
+      <div class="panel">
+        <div class="panel-head"><div><h2>Cost of goods</h2><p>One cost per SKU, used by every listing on every account.</p></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <select id="cogsShow" aria-label="Show"><option value="">All SKUs</option><option value="need">Needs a cost</option><option value="band">Using a price band</option><option value="known">Has a cost</option></select>
+            <input type="search" id="cogsSearch" placeholder="Search SKU or product" aria-label="Search costs"></div></div>
+        <div class="rules">
+          <div class="rule"><h3>Price bands (used when a SKU has no cost)</h3>
+            <div class="band-grid" id="bandGrid"></div>
+            <div style="margin-top:8px"><button class="btn" type="button" id="saveBands">Save bands</button></div></div>
+          <div class="rule"><h3>Returns</h3><p>A full refund puts the COGS back, because the part comes back. The loss is postage and any eBay fees not refunded. Partial refunds and claims keep the COGS.</p></div>
+          <div class="rule"><h3>VAT</h3><p>Motoviano isn't VAT-registered, so profit uses the full sale price and costs include VAT.</p></div>
+        </div>
+        <div class="seg" role="radiogroup" aria-label="When a cost changes">
+          <b>When I change a cost:</b>
+          <label><input type="radio" name="cmode" value="all" checked> correct it for all sales</label>
+          <label><input type="radio" name="cmode" value="from"> use it for sales from <input type="date" id="cFrom"></label>
+        </div>
+        <div class="tbl-wrap"><table id="cogsTable"></table></div>
+      </div>
+    </section>
+
+    <section id="p-charts" data-p hidden>
+      <div class="grid2">
+        <div class="panel"><div class="panel-head"><h2>Net profit by month</h2></div><div class="chart-box"><canvas id="cMonth" role="img" aria-label="Net profit by month and account"></canvas></div></div>
+        <div class="panel"><div class="panel-head"><h2>Sales and orders by week</h2></div><div class="chart-box"><canvas id="cWeek" role="img" aria-label="Weekly sales and orders"></canvas></div></div>
+        <div class="panel"><div class="panel-head"><h2>Profit by product group</h2></div><div class="chart-box"><canvas id="cGroup" role="img" aria-label="Profit by product group"></canvas></div></div>
+        <div class="panel"><div class="panel-head"><h2>Top 10 products by profit</h2></div><div class="chart-box"><canvas id="cTop" role="img" aria-label="Top ten products by profit"></canvas></div></div>
+      </div>
+    </section>
+
+    <section id="p-uploads" data-p hidden>
+      <div class="panel">
+        <div class="panel-head"><div><h2>Upload reports</h2><p>eBay Transaction reports, eBay All active listings reports, Amazon Date Range reports, and COGS lists (CSV or Excel with SKU and cost columns).</p></div></div>
+        <div class="drop" id="drop">
+          <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg>
+          <b>Drop files here</b>
+          <span>The account is read from the file. Rows already loaded are skipped, so overlapping date ranges are safe.</span>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;align-items:center">
+            <label for="upAcc" class="muted">Listings account:</label>
+            <select id="upAcc"><option value="">Work it out from the file</option></select>
+            <label class="btn primary" for="upFile">Choose files</label><input id="upFile" type="file" multiple accept=".csv,.xlsx,.xls" hidden>
+          </div>
+        </div>
+        <div class="results" id="upResults"></div>
+        <div class="panel-head"><h2>Upload history</h2></div>
+        <div class="tbl-wrap"><table id="upTable"></table></div>
+      </div>
+    </section>
+
+    <section id="p-users" data-p hidden>
+      <div class="panel">
+        <div class="panel-head"><div><h2>Users</h2><p>Everyone here can see all Motoviano accounts, upload files and edit costs. Admins can also add or remove users.</p></div>
+          <button class="btn" type="button" id="backupBtn" hidden>Download database backup</button></div>
+        <form class="form-row" id="addUser" hidden>
+          <div class="f"><label for="nuName">Name</label><input type="text" id="nuName" required></div>
+          <div class="f"><label for="nuEmail">Email</label><input type="email" id="nuEmail" required></div>
+          <div class="f"><label for="nuPw">Password</label><input type="password" id="nuPw" minlength="8" required></div>
+          <label style="display:flex;gap:6px;align-items:center;padding-bottom:8px"><input type="checkbox" id="nuAdmin"> Admin</label>
+          <button class="btn primary" type="submit">Add user</button>
+        </form>
+        <div class="tbl-wrap"><table id="userTable"></table></div>
+        <form class="form-row" id="myPw">
+          <div class="f"><label for="myNewPw">Change my password</label><input type="password" id="myNewPw" minlength="8" required placeholder="At least 8 characters"></div>
+          <button class="btn" type="submit">Save password</button>
+        </form>
+      </div>
+    </section>
+  </main>
+</div>
+<div class="toast" id="toast" hidden></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

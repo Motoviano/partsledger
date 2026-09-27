@@ -1,0 +1,387 @@
+[
+{
+"item_id": "137690681418",
+"sku": "FOG-W907-L",
+"note": "confirmed SKU"
+},
+{
+"item_id": "198613301659",
+"sku": "FOG-W907-L",
+"note": "confirmed SKU"
+},
+{
+"item_id": "398351372864",
+"sku": "FOG-W907-L",
+"note": "confirmed SKU"
+},
+{
+"item_id": "137690676062",
+"sku": "FOG-W907-PR",
+"note": "confirmed SKU"
+},
+{
+"item_id": "198613298141",
+"sku": "FOG-W907-PR",
+"note": "confirmed SKU"
+},
+{
+"item_id": "398351329179",
+"sku": "FOG-W907-PR",
+"note": "confirmed SKU"
+},
+{
+"item_id": "137690691755",
+"sku": "FOG-W907-R",
+"note": "confirmed SKU"
+},
+{
+"item_id": "198613302953",
+"sku": "FOG-W907-R",
+"note": "confirmed SKU"
+},
+{
+"item_id": "398351374692",
+"sku": "FOG-W907-R",
+"note": "confirmed SKU"
+},
+{
+"item_id": "137691164392",
+"sku": "MC-MK8-L",
+"note": "confirmed SKU"
+},
+{
+"item_id": "198613364335",
+"sku": "MC-MK8-L",
+"note": "confirmed SKU"
+},
+{
+"item_id": "398351876626",
+"sku": "MC-MK8-L",
+"note": "confirmed SKU"
+},
+{
+"item_id": "137691167803",
+"sku": "MC-MK8-PR",
+"note": "confirmed SKU"
+},
+{
+"item_id": "198613377094",
+"sku": "MC-MK8-PR",
+"note": "confirmed SKU"
+},
+{
+"item_id": "398351887412",
+"sku": "MC-MK8-PR",
+"note": "confirmed SKU"
+},
+{
+"item_id": "137691160759",
+"sku": "MC-MK8-R",
+"note": "confirmed SKU"
+},
+{
+"item_id": "198613362107",
+"sku": "MC-MK8-R",
+"note": "confirmed SKU"
+},
+{
+"item_id": "398351889607",
+"sku": "MC-MK8-R",
+"note": "confirmed SKU"
+},
+{
+"item_id": "137178712721",
+"sku": "MRRCUS-0624-LH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "198236795719",
+"sku": "MRRCUS-0624-LH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "397747277725",
+"sku": "MRRCUS-0624-LH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "198236756807",
+"sku": "MRRCUS-0648-LH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "397746870558",
+"sku": "MRRCUS-0648-LH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "198236789246",
+"sku": "MRRCUS-0662-LH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "397747097172",
+"sku": "MRRCUS-0662-LH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "137178727276",
+"sku": "MRRCUS-0631-RH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "198236806180",
+"sku": "MRRCUS-0631-RH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "397747263653",
+"sku": "MRRCUS-0631-RH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "137178757801",
+"sku": "MRRCUS-0655-RH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "198236758998",
+"sku": "MRRCUS-0655-RH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "397746822553",
+"sku": "MRRCUS-0655-RH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "198236764641",
+"sku": "MRRCUS-0679-RH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "397746809823",
+"sku": "MRRCUS-0679-RH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "137178819806",
+"sku": "MRRMK8-0488-LH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "198236752127",
+"sku": "MRRMK8-0488-LH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "397746451692",
+"sku": "MRRMK8-0488-LH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "137178826483",
+"sku": "MRRMK8-0495-RH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "198236727161",
+"sku": "MRRMK8-0495-RH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "397746421241",
+"sku": "MRRMK8-0495-RH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "137522585375",
+"sku": "MRRSP6-0600-LH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "198236900821",
+"sku": "MRRSP6-0600-LH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "397760166837",
+"sku": "MRRSP6-0600-LH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "137178872883",
+"sku": "MRRSP6-0617-RH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "198236907381",
+"sku": "MRRSP6-0617-RH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "397760264437",
+"sku": "MRRSP6-0617-RH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "137522586954",
+"sku": "MRRSP6-0600-LH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "137178881011",
+"sku": "MRRSP7-0723-LH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "137522592540",
+"sku": "MRRSP7-0723-LH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "397747461137",
+"sku": "MRRSP7-0723-LH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "397747479016",
+"sku": "MRRSP7-0723-LH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "137178876583",
+"sku": "MRRSP7-0709-LH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "198236827031",
+"sku": "MRRSP7-0709-LH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "397747502168",
+"sku": "MRRSP7-0709-LH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "137178882923",
+"sku": "MRRSP7-0730-RH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "137522593122",
+"sku": "MRRSP7-0730-RH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "198236890731",
+"sku": "MRRSP7-0730-RH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "198236898873",
+"sku": "MRRSP7-0730-RH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "398185176456",
+"sku": "MRRSP7-0730-RH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "398185179540",
+"sku": "MRRSP7-0730-RH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "137178878483",
+"sku": "MRRSP7-0716-RH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "198236829438",
+"sku": "MRRSP7-0716-RH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "397747465986",
+"sku": "MRRSP7-0716-RH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "397761470391",
+"sku": "MRRSP7-0716-RH",
+"note": "confirmed SKU"
+},
+{
+"item_id": "397765247862",
+"sku": "MIL-CUS-L",
+"note": "confirmed SKU"
+},
+{
+"item_id": "397747217385",
+"sku": "MIL-CUS-PR",
+"note": "confirmed SKU"
+},
+{
+"item_id": "397747231744",
+"sku": "MIL-CUS-R",
+"note": "confirmed SKU"
+},
+{
+"item_id": "137690700082",
+"sku": "MIL-W907-L",
+"note": "confirmed SKU"
+},
+{
+"item_id": "198613304808",
+"sku": "MIL-W907-L",
+"note": "confirmed SKU"
+},
+{
+"item_id": "398351364714",
+"sku": "MIL-W907-L",
+"note": "confirmed SKU"
+},
+{
+"item_id": "137690715197",
+"sku": "MIL-W907-PR",
+"note": "confirmed SKU"
+},
+{
+"item_id": "198613307800",
+"sku": "MIL-W907-PR",
+"note": "confirmed SKU"
+},
+{
+"item_id": "398351360120",
+"sku": "MIL-W907-PR",
+"note": "confirmed SKU"
+},
+{
+"item_id": "137690703644",
+"sku": "MIL-W907-R",
+"note": "confirmed SKU"
+},
+{
+"item_id": "198613306202",
+"sku": "MIL-W907-R",
+"note": "confirmed SKU"
+},
+{
+"item_id": "398351367083",
+"sku": "MIL-W907-R",
+"note": "confirmed SKU"
+},
+{
+"item_id": "198236898873",
+"sku": "MRRSP7-0730-RH",
+"note": "was '6'"
+},
+{
+"item_id": "198504579159",
+"sku": "MRRSP7-0723-LH",
+"note": "was '6'"
+}
+]
