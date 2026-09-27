@@ -7,7 +7,7 @@ const cls = v => v < 0 ? 'neg' : '';
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const $ = id => document.getElementById(id);
-function toast(msg) { const t = $('toast'); t.textContent = msg; t.hidden = false; clearTimeout(toast.h); toast.h = setTimeout(() => t.hidden = true, 3200); }
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.hidden = false; clearTimeout(toast.h); toast.h = setTimeout(() => t.hidden = true, Math.max(3200, msg.length * 60)); }
 async function api(url, opt = {}) {
   const r = await fetch(url, opt);
   if (r.status === 401) { location.href = '/login'; throw new Error('login'); }
@@ -294,13 +294,100 @@ $('addUser').onsubmit = async e => {
 $('myPw').onsubmit = async e => { e.preventDefault(); try { await post(`/api/users/${ME.id}/password`, { password: $('myNewPw').value }); toast('Your password was changed'); e.target.reset(); } catch (err) { toast(err.message); } };
 $('backupBtn').onclick = () => { location.href = '/api/backup'; };
 
+
+// ---------------------------------------------------------------- eBay
+let EBS = null, cpRows = [], jobTimer = null;
+async function renderEbay() {
+  EBS = await api('/api/ebay/status');
+  const setup = $('ebaySetup');
+  setup.hidden = EBS.configured && !EBS.missing.length;
+  setup.innerHTML = `The eBay keys aren't set yet. In Render, open partsledger → Environment and add: <b>${EBS.missing.map(esc).join(', ')}</b>. Then connect each account below.`;
+  $('ebayAcc').innerHTML = `<thead><tr><th class="l">Account</th><th class="l">Status</th><th class="l">Login valid until</th><th></th></tr></thead><tbody>${EBS.accounts.map(a => {
+    const c = a.connection;
+    return `<tr><td class="l"><span class="dot" style="background:${a.color}"></span>${esc(a.name)}</td>
+      <td class="l">${c ? `<span class="chip k">Connected as ${esc(c.ebay_user)}</span>` : '<span class="chip m">Not connected</span>'}</td>
+      <td class="l">${c && c.refresh_expires ? nice(c.refresh_expires) : '–'}</td>
+      <td>${ME.is_admin ? `<a class="btn" href="/ebay/connect/${a.id}">${c ? 'Reconnect' : 'Connect'}</a>${c ? ` <button class="link danger" type="button" data-disc="${a.id}">Disconnect</button>` : ''}` : ''}</td></tr>`;
+  }).join('')}</tbody>`;
+  document.querySelectorAll('[data-disc]').forEach(b => b.onclick = async () => {
+    if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = 'Click again to disconnect'; return; }
+    await api('/api/ebay/disconnect/' + b.dataset.disc, { method: 'POST' }); toast('Disconnected'); renderEbay();
+  });
+  const opts = EBS.accounts.map(a => `<option value="${a.id}">${esc(a.name)}${a.connection ? '' : ' (not connected)'}</option>`).join('');
+  if (!$('cpFrom').options.length) {
+    $('cpFrom').innerHTML = opts; $('cpTo').innerHTML = opts;
+    const auto = EBS.accounts.find(a => a.name === 'Autonation'); if (auto) $('cpFrom').value = auto.id;
+    const other = EBS.accounts.find(a => a.id != $('cpFrom').value); if (other) $('cpTo').value = other.id;
+    loadPolicies();
+  }
+  const jobs = await api('/api/ebay/jobs'); if (jobs[0] && !$('cpJob').dataset.job) showJob(jobs[0].id);
+}
+async function loadPolicies() {
+  ['cpShip', 'cpRet', 'cpPay'].forEach(id => $(id).innerHTML = '<option value="">Loading…</option>');
+  try {
+    const p = await api('/api/ebay/policies/' + $('cpTo').value);
+    const fill = (id, list) => $(id).innerHTML = list.length ? list.map(x => `<option value="${esc(x.id)}" ${x.default ? 'selected' : ''}>${esc(x.name)}</option>`).join('') : '<option value="">None found</option>';
+    fill('cpShip', p.SHIPPING); fill('cpRet', p.RETURN_POLICY); fill('cpPay', p.PAYMENT);
+  } catch (e) { ['cpShip', 'cpRet', 'cpPay'].forEach(id => $(id).innerHTML = '<option value="">Connect this account first</option>'); }
+}
+$('cpTo').onchange = () => { loadPolicies(); $('cpTable').innerHTML = ''; cpRows = []; cpCount(); };
+$('cpFrom').onchange = () => { $('cpTable').innerHTML = ''; cpRows = []; cpCount(); };
+function newPrice(p) { const k = $('cpPriceKind').value, v = +$('cpPriceVal').value || 0; return Math.max(0.99, k === 'pct' ? p * (1 + v / 100) : k === 'add' ? p + v : p); }
+function cpCount() { const n = document.querySelectorAll('.cp-sel:checked').length; $('cpCount').textContent = cpRows.length ? `${n} of ${cpRows.length} selected` : ''; }
+function drawCp() {
+  $('cpTable').innerHTML = cpRows.length ? `<thead><tr><th class="l"><input type="checkbox" id="cpAll" aria-label="Select all" checked></th><th class="l">SKU</th><th class="l">Title</th><th>Price now</th><th>New price</th><th>Sold</th><th class="l"></th></tr></thead><tbody>${
+    cpRows.map((r, i) => `<tr><td class="l"><input type="checkbox" class="cp-sel" id="cp-${i}" data-item="${esc(r.item_id)}" ${r.dupe_in_source ? '' : 'checked'} aria-label="Select ${esc(r.sku)}"></td>
+      <td class="l"><span class="sku">${esc(r.sku)}</span></td><td class="l prod"><span class="t">${esc(r.title)}</span></td><td>${gbp(r.price)}</td><td><b>${gbp(newPrice(r.price || 0))}</b></td><td>${n0(r.sold)}</td>
+      <td class="l">${r.dupe_in_source ? '<span class="chip ret">Same SKU listed twice on source</span>' : ''}</td></tr>`).join('')}</tbody>`
+    : `<tbody><tr><td class="empty">Every listing with that SKU start is already on the other account.</td></tr></tbody>`;
+  const all = $('cpAll'); if (all) all.onchange = () => { document.querySelectorAll('.cp-sel').forEach(b => b.checked = all.checked); cpCount(); };
+  document.querySelectorAll('.cp-sel').forEach(b => b.onchange = cpCount); cpCount();
+}
+['cpPriceKind', 'cpPriceVal'].forEach(id => $(id).addEventListener('input', () => cpRows.length && drawCp()));
+$('cpLoad').onclick = async () => {
+  if ($('cpFrom').value === $('cpTo').value) return toast('Choose two different accounts.');
+  cpRows = await api(`/api/ebay/candidates?source=${$('cpFrom').value}&target=${$('cpTo').value}&prefix=${encodeURIComponent($('cpPrefix').value)}`);
+  drawCp();
+};
+async function startJob(mode) {
+  const items = [...document.querySelectorAll('.cp-sel:checked')].map(b => b.dataset.item);
+  if (!items.length) return toast('Select at least one listing.');
+  try {
+    const r = await post('/api/ebay/jobs', { source: +$('cpFrom').value, target: +$('cpTo').value, mode, items,
+      price: { kind: $('cpPriceKind').value, value: +$('cpPriceVal').value || 0 },
+      policies: { shipping: $('cpShip').value, return: $('cpRet').value, payment: $('cpPay').value } });
+    showJob(r.job);
+  } catch (e) { toast(e.message); }
+}
+$('cpVerify').onclick = () => startJob('verify');
+$('cpCopy').onclick = () => {
+  const b = $('cpCopy'); if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = 'Click again to create the listings'; setTimeout(() => { b.dataset.sure = ''; b.textContent = 'Copy selected'; }, 6000); return; }
+  b.dataset.sure = ''; b.textContent = 'Copy selected'; startJob('copy');
+};
+async function showJob(id) {
+  clearTimeout(jobTimer); $('cpJob').dataset.job = id;
+  const { job, items } = await api('/api/ebay/jobs/' + id);
+  const run = job.status === 'running' || job.status === 'queued';
+  $('cpJob').innerHTML = `<div class="panel-head"><div><h2>${job.mode === 'verify' ? 'Check' : 'Copy'} #${job.id}: ${job.done} of ${job.total} done</h2>
+    <p>${job.ok} ${job.mode === 'verify' ? 'passed' : 'listed'} · ${job.failed} failed · ${run ? 'working…' : esc(job.status)}</p></div></div>
+    <div class="tbl-wrap"><table><thead><tr><th class="l">SKU</th><th class="l">Title</th><th class="l">Result</th><th class="l">New item</th></tr></thead><tbody>${items.map(i => `<tr>
+      <td class="l"><span class="sku">${esc(i.sku || '')}</span></td><td class="l prod"><span class="t">${esc(i.title || '')}</span></td>
+      <td class="l prod">${i.status === 'ok' ? '<span class="chip k">OK</span> ' : i.status === 'failed' ? '<span class="chip m">Failed</span> ' : '<span class="chip b">Waiting</span> '}${esc(i.message || '')}</td>
+      <td class="l">${i.new_item_id ? `<a href="https://www.ebay.co.uk/itm/${esc(i.new_item_id)}" target="_blank" rel="noopener">${esc(i.new_item_id)}</a>` : ''}</td></tr>`).join('')}</tbody></table></div>`;
+  if (run) jobTimer = setTimeout(() => showJob(id), 2500);
+}
+(() => { const q = new URLSearchParams(location.search), e = q.get('ebay'); if (!e) return;
+  const m = { ok: 'eBay account connected', declined: 'eBay connection was cancelled', notset: 'Add the eBay keys in Render first',
+    wrong: `You logged in to eBay as ${q.get('got')}, which isn't this account. Log out of eBay and connect again with the right account.`, error: 'eBay said: ' + (q.get('msg') || 'error') };
+  setTimeout(() => toast(m[e] || e), 600); try { history.replaceState(null, '', '/#ebay'); } catch (err) { } })();
+
 // ---------------------------------------------------------------- wiring
-const titles = { dash: 'Dashboard', orders: 'Sold items', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', users: 'Users' };
+const titles = { dash: 'Dashboard', orders: 'Sold items', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
 let page = 'dash';
 function show(p) {
   page = p; document.querySelectorAll('[data-p]').forEach(s => s.hidden = s.id !== 'p-' + p);
   document.querySelectorAll('#nav button').forEach(b => b.dataset.page === p ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current'));
-  $('pageTitle').textContent = titles[p]; $('filters').hidden = p === 'uploads' || p === 'users';
+  $('pageTitle').textContent = titles[p]; $('filters').hidden = p === 'uploads' || p === 'users' || p === 'ebay';
   renderAll(); try { history.replaceState(null, '', '#' + p); } catch (e) { }
 }
 document.querySelectorAll('#nav button').forEach(b => b.onclick = () => show(b.dataset.page));
@@ -314,6 +401,7 @@ function renderAll() {
   if (page === 'charts') renderCharts();
   if (page === 'uploads') renderUploads();
   if (page === 'users') renderUsers();
+  if (page === 'ebay') renderEbay();
 }
 ['fPeriod', 'fFrom', 'fTo'].forEach(id => $(id).addEventListener('change', () => { ordState.limit = 100; renderAll(); }));
 ['prodSearch', 'ordSearch'].forEach(id => $(id).addEventListener('input', renderAll));

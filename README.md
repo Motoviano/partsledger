@@ -92,3 +92,30 @@ pip install -r requirements.txt
 ADMIN_EMAIL=you@example.com ADMIN_PASSWORD=choose-one HTTPS_ONLY=0 uvicorn app.main:app --port 8000
 ```
 Then open http://localhost:8000. The database is created in `data/partsledger.db`.
+
+---
+
+## eBay connection and listing copier
+
+The **eBay** page connects each account through eBay's official login, then copies listings between accounts
+(title, description, photos, item specifics and every fitment row; postage/returns/payment use the other account's own policies).
+Use **Check selected** first: it asks eBay to validate the listing without creating it.
+
+### One-off setup
+
+1. **Render → partsledger → Environment**, add and save (the app redeploys):
+   * `PUBLIC_URL` = `https://profit.motoviano.com`
+   * `EBAY_VERIFICATION_TOKEN` = any 32–80 characters (letters, numbers, `_`, `-`)
+2. **developer.ebay.com** → join with the company email, then **Application Keys** → create a keyset → **Production**.
+   * When asked about **Marketplace account deletion**, choose to receive notifications:
+     endpoint `https://profit.motoviano.com/ebay/account-deletion`, verification token = the same value as step 1. Save (eBay checks the address).
+   * Copy the **App ID (Client ID)** and **Cert ID (Client Secret)**.
+3. **User Tokens → Get a Token from eBay via Your Application → Add eBay Redirect URL**:
+   * Display title: `Partsledger`; Privacy policy URL: `https://profit.motoviano.com/privacy`
+   * Auth accepted URL: `https://profit.motoviano.com/ebay/callback`
+   * Auth declined URL: `https://profit.motoviano.com/ebay/declined`
+   * Make sure **OAuth** is selected. Save and copy the **RuName** shown (looks like `Motoviano-Motovian-Partsl-abcdefg`).
+4. **Render → Environment**, add: `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET`, `EBAY_RUNAME`. Save.
+5. In Partsledger → **eBay** → **Connect** next to each account, and sign in to eBay **as that account**.
+   The app refuses a login that doesn't match the account (so you can't connect Newgates19uk to the Autonation row by mistake).
+   Logins last about 18 months; the page shows the expiry date.

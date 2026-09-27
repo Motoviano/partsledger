@@ -14,6 +14,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from . import db as DB
 from . import importers as IM
 from . import profit as PR
+from . import ebay as EB
 from .auth import check_pw, ensure_admin, hash_pw
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -21,13 +22,15 @@ SECRET = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
 
 app = FastAPI(title="Partsledger", docs_url=None, redoc_url=None, openapi_url=None)
 app.add_middleware(SessionMiddleware, secret_key=SECRET, session_cookie="pl_session", max_age=60 * 60 * 24 * 14,
-                   same_site="strict", https_only=os.environ.get("HTTPS_ONLY", "1") == "1")
+                   same_site="lax", https_only=os.environ.get("HTTPS_ONLY", "1") == "1")
 
 
 @app.on_event("startup")
 def startup():
     DB.init()
     with DB.db() as con:
+        con.executescript(EB.SCHEMA)
+        con.execute("UPDATE ebay_jobs SET status='stopped' WHERE status IN ('queued','running')")
         ensure_admin(con)
 
 
@@ -99,6 +102,17 @@ def static(name: str, request: Request):
 def favicon():
     from fastapi.responses import Response
     return Response(status_code=204)
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+def privacy():
+    return """<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Privacy · Partsledger</title><body style="font:16px/1.5 system-ui,sans-serif;max-width:680px;margin:40px auto;padding:0 16px">
+<h1>Partsledger privacy notice</h1>
+<p>Partsledger is an internal tool used only by Motoviano Ltd staff to manage its own eBay and Amazon seller accounts.</p>
+<p>It stores the company's own sales, fees and listing data from its seller accounts, and the login details of staff users.
+It does not store buyer names, addresses or contact details, and it does not share any data with third parties.</p>
+<p>Contact: contact@motoviano.com</p></body>"""
 
 
 @app.get("/healthz")
@@ -323,6 +337,155 @@ def backup(request: Request):
     src.close()
     dst.close()
     return FileResponse(tmp, filename=tmp.name, media_type="application/octet-stream")
+
+
+# ------------------------------------------------------------------ eBay connection
+@app.get("/api/ebay/status")
+def ebay_status(request: Request):
+    need_user(request)
+    with DB.db() as con:
+        toks = {r["account_id"]: dict(r) for r in con.execute("SELECT account_id,ebay_user,refresh_expires,connected_at,connected_by FROM ebay_tokens")}
+        accs = [dict(r) for r in con.execute("SELECT id,name,seller_id,color FROM accounts WHERE channel='ebay' ORDER BY sort,id")]
+    for a in accs:
+        a["connection"] = toks.get(a["id"])
+    return {"configured": EB.configured(), "missing": EB.missing_settings(), "accounts": accs,
+            "callbackHint": (os.environ.get("PUBLIC_URL", "").rstrip("/") + "/ebay/callback") if os.environ.get("PUBLIC_URL") else None}
+
+
+@app.get("/ebay/connect/{account_id}")
+def ebay_connect(account_id: int, request: Request):
+    if not user(request):
+        return RedirectResponse("/login", status_code=303)
+    need_admin(request)
+    if not EB.configured():
+        return RedirectResponse("/?ebay=notset#ebay", status_code=303)
+    return RedirectResponse(EB.auth_link(account_id), status_code=303)
+
+
+@app.get("/ebay/callback")
+def ebay_callback(request: Request, code: str = "", state: str = "", error: str = ""):
+    u = user(request)
+    if not u:
+        return RedirectResponse("/login", status_code=303)
+    account_id = EB.pop_state(state)
+    if error or not code or not account_id:
+        return RedirectResponse("/?ebay=declined#ebay", status_code=303)
+    try:
+        tok = EB.exchange_code(code)
+        with DB.db() as con:
+            expected = con.execute("SELECT seller_id FROM accounts WHERE id=?", (account_id,)).fetchone()["seller_id"]
+            got = EB.get_user_id(tok["access_token"]) or ""
+            if expected and got.lower() != expected.lower():
+                return RedirectResponse(f"/?ebay=wrong&got={got}#ebay", status_code=303)
+            EB.save_connection(con, account_id, tok, u["email"])
+    except EB.EbayError as e:
+        return RedirectResponse("/?ebay=error&msg=" + str(e)[:200].replace("&", " ") + "#ebay", status_code=303)
+    return RedirectResponse("/?ebay=ok#ebay", status_code=303)
+
+
+@app.get("/ebay/declined")
+def ebay_declined():
+    return RedirectResponse("/?ebay=declined#ebay", status_code=303)
+
+
+@app.post("/api/ebay/disconnect/{account_id}")
+def ebay_disconnect(account_id: int, request: Request):
+    need_admin(request)
+    with DB.db() as con:
+        con.execute("DELETE FROM ebay_tokens WHERE account_id=?", (account_id,))
+    return {"ok": True}
+
+
+@app.get("/api/ebay/policies/{account_id}")
+def ebay_policies(account_id: int, request: Request):
+    need_user(request)
+    try:
+        with DB.db() as con:
+            tok = EB.access_token(con, account_id)
+        return EB.get_policies(tok)
+    except EB.EbayError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/ebay/candidates")
+def ebay_candidates(request: Request, source: int, target: int, prefix: str = ""):
+    need_user(request)
+    pre = prefix.strip().upper()
+    with DB.db() as con:
+        have = {(r["sku"] or "").upper() for r in con.execute("SELECT sku FROM listings WHERE account_id=?", (target,))}
+        rows = [dict(r) for r in con.execute(
+            "SELECT item_id,sku,title,price,qty,sold FROM listings WHERE account_id=? AND COALESCE(qty,1)>0 ORDER BY sku,price", (source,))]
+        done = {r["item_id"] for r in con.execute(
+            "SELECT i.item_id FROM ebay_job_items i JOIN ebay_jobs j ON j.id=i.job_id WHERE j.mode='copy' AND j.target_id=? AND i.status='ok'", (target,))}
+    out, seen = [], set()
+    for r in rows:
+        s = (r["sku"] or "").upper()
+        if not s or (pre and not s.startswith(pre)) or s in have or r["item_id"] in done:
+            continue
+        r["dupe_in_source"] = s in seen
+        seen.add(s)
+        out.append(r)
+    return out
+
+
+@app.post("/api/ebay/jobs")
+async def ebay_new_job(request: Request):
+    u = need_user(request)
+    b = await request.json()
+    items = [str(x) for x in b.get("items", [])][:500]
+    mode = "verify" if b.get("mode") == "verify" else "copy"
+    if not items:
+        raise HTTPException(400, "Select at least one listing.")
+    src, dst = int(b["source"]), int(b["target"])
+    if src == dst:
+        raise HTTPException(400, "Choose a different account to copy to.")
+    pol = b.get("policies") or {}
+    if mode == "copy" and not all(pol.get(k) for k in ("shipping", "return", "payment")):
+        raise HTTPException(400, "Choose the postage, returns and payment policies for the account you're copying to.")
+    with DB.db() as con:
+        for a in (src, dst):
+            EB.access_token(con, a)  # fails early if not connected
+        info = {r["item_id"]: dict(r) for r in con.execute(
+            f"SELECT item_id,sku,title,price FROM listings WHERE account_id=? AND item_id IN ({','.join('?'*len(items))})", [src, *items])}
+        jid = con.execute("INSERT INTO ebay_jobs(created_by,source_id,target_id,mode,settings,status,total) VALUES(?,?,?,?,?,?,?)",
+                          (u["email"], src, dst, mode, json.dumps({"price": b.get("price"), "policies": pol}), "queued", len(items))).lastrowid
+        for it in items:
+            r = info.get(it, {})
+            con.execute("INSERT INTO ebay_job_items(job_id,item_id,sku,title,price) VALUES(?,?,?,?,?)", (jid, it, r.get("sku"), r.get("title"), r.get("price")))
+    import threading
+    threading.Thread(target=EB.run_job, args=(DB.db, jid), daemon=True).start()
+    return {"job": jid}
+
+
+@app.get("/api/ebay/jobs")
+def ebay_jobs(request: Request):
+    need_user(request)
+    with DB.db() as con:
+        return [dict(r) for r in con.execute("""SELECT j.*, s.name AS source, t.name AS target FROM ebay_jobs j
+            JOIN accounts s ON s.id=j.source_id JOIN accounts t ON t.id=j.target_id ORDER BY j.id DESC LIMIT 20""")]
+
+
+@app.get("/api/ebay/jobs/{job_id}")
+def ebay_job(job_id: int, request: Request):
+    need_user(request)
+    with DB.db() as con:
+        j = con.execute("SELECT * FROM ebay_jobs WHERE id=?", (job_id,)).fetchone()
+        if not j:
+            raise HTTPException(404, "Job not found.")
+        return {"job": dict(j), "items": [dict(r) for r in con.execute("SELECT * FROM ebay_job_items WHERE job_id=? ORDER BY id", (job_id,))]}
+
+
+# eBay requires every app to accept "marketplace account deletion" notices.
+# We don't keep buyer names or addresses, so there is nothing to delete; we confirm receipt.
+@app.get("/ebay/account-deletion")
+def ebay_deletion_check(challenge_code: str = ""):
+    return {"challengeResponse": EB.deletion_challenge(challenge_code)}
+
+
+@app.post("/ebay/account-deletion")
+async def ebay_deletion_notice(request: Request):
+    await request.body()
+    return JSONResponse({}, status_code=200)
 
 
 @app.exception_handler(HTTPException)

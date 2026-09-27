@@ -171,3 +171,5 @@ body{margin:0}
 .inline-sku{display:flex;gap:6px;margin-top:6px}
 .inline-sku input{width:150px;font:inherit;padding:4px 6px;border:1px solid var(--line);border-radius:5px;background:var(--surface2);color:var(--ink)}
 .drop.over{border-color:var(--accent);background:var(--accent-soft)}
+
+a.btn{text-decoration:none;display:inline-block}

@@ -19,6 +19,7 @@
       <button data-page="cogs"><svg viewBox="0 0 24 24"><path d="M20 12l-8 8-9-9V3h8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg><span>COGS</span></button>
       <button data-page="charts"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span>Charts</span></button>
       <button data-page="uploads"><svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg><span>Uploads</span></button>
+      <button data-page="ebay"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/><circle cx="19" cy="17" r="2.5"/></svg><span>eBay</span></button>
       <button data-page="users"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5M16 4.5a3.5 3.5 0 010 7M21.5 20c-.5-2.6-1.9-4.3-3.9-5.1"/></svg><span>Users</span></button>
     </nav>
     <div class="side-foot" id="sideFoot"></div>
@@ -114,6 +115,38 @@
         <div class="results" id="upResults"></div>
         <div class="panel-head"><h2>Upload history</h2></div>
         <div class="tbl-wrap"><table id="upTable"></table></div>
+      </div>
+    </section>
+
+    <section id="p-ebay" data-p hidden>
+      <div class="panel">
+        <div class="panel-head"><div><h2>eBay connections</h2><p>Connect each account once. Partsledger can then read listings and create new ones on it.</p></div></div>
+        <p class="notice" id="ebaySetup" style="margin:14px" hidden></p>
+        <div class="tbl-wrap"><table id="ebayAcc"></table></div>
+      </div>
+      <div class="panel" style="margin-top:18px">
+        <div class="panel-head"><div><h2>Copy listings to another account</h2><p>Copies title, description, photos, item specifics and every fitment row. Postage, returns and payment use the other account's own policies.</p></div></div>
+        <div class="form-row">
+          <div class="f"><label for="cpFrom">Copy from</label><select id="cpFrom"></select></div>
+          <div class="f"><label for="cpTo">Copy to</label><select id="cpTo"></select></div>
+          <div class="f"><label for="cpPrefix">SKU starts with</label><input type="text" id="cpPrefix" value="GRLL" style="width:110px"></div>
+          <button class="btn" type="button" id="cpLoad">Show listings not on that account</button>
+        </div>
+        <div class="form-row" style="padding-top:0">
+          <div class="f"><label for="cpPriceKind">Price on the new account</label>
+            <select id="cpPriceKind"><option value="same">Same price</option><option value="pct">Change by %</option><option value="add">Add or take off £</option></select></div>
+          <div class="f"><label for="cpPriceVal">Amount</label><input type="number" id="cpPriceVal" value="0" step="0.5" style="width:90px"></div>
+          <div class="f"><label for="cpShip">Postage policy</label><select id="cpShip"></select></div>
+          <div class="f"><label for="cpRet">Returns policy</label><select id="cpRet"></select></div>
+          <div class="f"><label for="cpPay">Payment policy</label><select id="cpPay"></select></div>
+        </div>
+        <div class="tbl-wrap"><table id="cpTable"></table></div>
+        <div class="form-row">
+          <span class="muted" id="cpCount"></span>
+          <button class="btn" type="button" id="cpVerify">Check selected (nothing is listed)</button>
+          <button class="btn primary" type="button" id="cpCopy">Copy selected</button>
+        </div>
+        <div id="cpJob"></div>
       </div>
     </section>
 
