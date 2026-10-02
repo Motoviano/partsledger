@@ -113,9 +113,19 @@ function renderTiles() {
   $('tiles').innerHTML = keys.map((k, i) => {
     const td = tileDef(k); let T, sub = td.r[0] === td.r[1] ? nice(td.r[0]) : `${nice(td.r[0])} – ${nice(td.r[1])}`;
     if (k === 'fc') {
+      // Forecast = what has sold so far this month + the expected daily pace for the days left.
+      // The pace blends the last 14 full days with last month's daily average, so a slow or busy
+      // first few days of the month doesn't swing it. Other fees (shop subscription, insertion fees)
+      // mostly land at the start of the month, so they are counted once: last month's total, or this
+      // month's so far if that's already more.
       const mt = [td.r[0], TODAY]; T = totals(itemsIn(f, mt), ohIn(f, mt));
-      const day = +TODAY.slice(8, 10), days = +td.r[1].slice(8, 10), mult = days / day;
-      ['sales', 'units', 'orders', 'fee', 'ad', 'po', 'rf', 'cogs', 'back', 'gross', 'net', 'ret', 'oh'].forEach(p => T[p] *= mult);
+      const r14 = [addD(TODAY, -14), addD(TODAY, -1)], p14 = totals(itemsIn(f, r14), []);
+      const lmDays = +lmR[1].slice(8, 10), left = +td.r[1].slice(8, 10) - +TODAY.slice(8, 10);
+      const has14 = p14.sales !== 0, hasLm = lm.sales !== 0;
+      const pace = p => has14 && hasLm ? (p14[p] / 14 + lm[p] / lmDays) / 2 : has14 ? p14[p] / 14 : hasLm ? lm[p] / lmDays : 0;
+      ['sales', 'units', 'orders', 'fee', 'ad', 'po', 'rf', 'cogs', 'back', 'gross', 'ret'].forEach(p => T[p] += pace(p) * left);
+      T.oh = Math.min(T.oh, lm.oh); T.net = T.gross + T.oh;
+      sub += ' · pace from last 14 days and last month';
     } else T = totals(itemsIn(f, td.r), ohIn(f, td.r));
     const d = (k === 'fc' || k === 'mtd') && lm.sales ? (T.sales - lm.sales) / Math.abs(lm.sales) : null;
     return `<article class="tile ${activeTile === k ? 'active' : ''}" style="--hd:var(${TILE_COLORS[i % 5]})" data-tile="${k}" tabindex="0" role="button" aria-label="Show ${td.name} in the product table">
@@ -129,7 +139,7 @@ function renderTiles() {
       <div class="kv"><small>COGS (net of returns)</small><b class="neg">${gbp(-(T.cogs - T.back))}</b></div>
       <div class="kv"><small>Product profit</small><b>${gbp(T.gross)}</b></div>
       <div class="kv"><small>Other fees</small><b class="${cls(T.oh)}">${gbp(T.oh)}</b></div>
-      <div class="net"><small>Net profit${k === 'fc' ? '<span class="delta">at the current daily pace</span>' : ''}</small><b class="${cls(T.net)}">${gbp(T.net)}</b></div>
+      <div class="net"><small>Net profit${k === 'fc' ? '<span class="delta">estimate</span>' : ''}</small><b class="${cls(T.net)}">${gbp(T.net)}</b></div>
     </div></article>`;
   }).join('');
   document.querySelectorAll('[data-tile]').forEach(el => {
