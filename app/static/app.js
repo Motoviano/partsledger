@@ -482,59 +482,139 @@ function edShowOpts() {
 }
 ['edField', 'edPriceHow', 'edTitleHow'].forEach(id => $(id).addEventListener('change', () => { edShowOpts(); $('edPrevPanel').hidden = true; }));
 
+// Step 1: the listings themselves. Ticks say which ones a bulk change touches; typed values are one-off changes.
+let edOff = new Set(), edTyped = new Map(), edTrInfo = null, edMode = 'bulk';
+const edKey = r => r.aid + '|' + r.id;
+const edLState = { sort: null, limit: 100, render: () => drawList(), empty: 'No listings match these filters.' };
 function edPicked() {
   const f = F(), pre = $('edPrefix').value.trim().toLowerCase(), q = $('edSearch').value.trim().toLowerCase(), st = $('edStock').value, tf = $('edTraffic').value;
   return EL.rows.map(r => ({ a: AIDX[r[0]], aid: r[0], id: r[1], sku: r[2], g: r[3], t: r[4], price: r[5], qty: r[6], sold: r[7], ad: r[8] }))
     .filter(r => r.a !== undefined && f.a.has(r.a) && (f.allG || f.g.has(r.g)) &&
       (!pre || r.sku.toLowerCase().startsWith(pre)) && (!q || r.t.toLowerCase().includes(q) || r.sku.toLowerCase().includes(q) || r.id.includes(q)) &&
       (st === 'all' || (st === 'in' ? r.qty > 0 : r.qty === 0)) &&
-      (!tf || (() => { const fl = edTraffic && edTraffic.get(r.a + '|' + r.id); return tf === 'attn' ? ['noimp', 'lowctr', 'nosale'].includes(fl) : fl === tf; })()));
+      (!tf || (() => { const fl = edTrInfo && edTrInfo.get(edKey(r))?.flag; return tf === 'attn' ? ['noimp', 'lowctr', 'nosale'].includes(fl) : fl === tf; })()));
+}
+function edProfitFn() {
+  const R = edRates(), cmap = COGSBY(), adIn = (+$('edAd').value || 0) / 100;
+  const f = (r, price) => {
+    const c = costAt(cmap, r.sku, price); if (!c) return null;
+    const ad = r.ad != null ? r.ad / 100 : adIn;
+    return { p: price * (1 - R.fee(r.a) - ad) - c.c - R.post(r.sku, r.g), c, ad, fee: R.fee(r.a), post: R.post(r.sku, r.g) };
+  };
+  f.R = R; f.cmap = cmap; return f;
 }
 async function renderEdit() {
   edShowOpts();
   if (!EL) { $('edCount').textContent = 'Loading listings…'; try { EL = await api('/api/edit/listings'); } catch (e) { toast(e.message); return; } }
-  if ($('edTraffic').value && !edTraffic) {
-    $('edCount').textContent = 'Loading traffic…';
-    const r = [addD(TODAY, -30), addD(TODAY, -1)], f = F();
-    const td = await api(`/api/traffic?start=${r[0]}&end=${r[1]}`);
-    edTraffic = new Map(trafficRows(td, { ...f, r, allG: true }).map(x => [x.a + '|' + x.id, x.flag]));
+  if (!edTrInfo) {
+    edTrInfo = new Map();
+    try {
+      const r = [addD(TODAY, -30), addD(TODAY, -1)], f = F();
+      const td = await api(`/api/traffic?start=${r[0]}&end=${r[1]}`);
+      trafficRows(td, { ...f, a: new Set(ACC.map(a => a.i)), r, allG: true }).forEach(x => edTrInfo.set(ACC[x.a].id + '|' + x.id, { imp: x.imp, v: x.v, flag: x.flag }));
+    } catch (e) { }
   }
-  const n = edPicked().length;
-  $('edCount').textContent = EL.connected.length ? `${n0(n)} listings match` : 'Connect an eBay account first (eBay page).';
-  renderEditJobs();
+  drawList(); renderEditJobs();
 }
-['edPrefix', 'edSearch'].forEach(id => $(id).addEventListener('input', () => { $('edPrevPanel').hidden = true; renderEdit(); }));
-['edStock', 'edTraffic'].forEach(id => $(id).addEventListener('change', () => { $('edPrevPanel').hidden = true; renderEdit(); }));
+function drawList() {
+  const rows = edPicked(), pf = edProfitFn();
+  rows.forEach(r => { r.tr = edTrInfo && edTrInfo.get(edKey(r)); const ty = edTyped.get(edKey(r)) || {}; r.pp = pf(r, ty.price ?? r.price ?? 0); });
+  const on = rows.filter(r => !edOff.has(edKey(r))).length;
+  $('edCount').textContent = EL.connected.length ? `${n0(rows.length)} listings · ${n0(on)} ticked` : 'Connect an eBay account first (eBay page).';
+  const typedN = [...edTyped.values()].filter(v => Object.keys(v).length).length;
+  $('edTypedBtn').disabled = !typedN; $('edTypedBtn').textContent = typedN ? `Review typed changes (${typedN})` : 'Review typed changes';
+  const cols = [
+    { h: '', l: 1, v: r => edOff.has(edKey(r)) ? 1 : 0, f: r => `<input type="checkbox" class="el-sel" data-k="${esc(edKey(r))}" ${edOff.has(edKey(r)) ? '' : 'checked'} aria-label="Tick ${esc(r.sku || r.id)}">` },
+    { h: 'Listing', l: 1, cl: 'prod', v: r => r.t, f: r => { const ty = edTyped.get(edKey(r)) || {};
+        const title = ty.title != null ? `<input class="title-in changed" data-k="${esc(edKey(r))}" data-f="title" value="${esc(ty.title)}" maxlength="120" aria-label="New title"><span class="tlen ${ty.title.length > 80 ? 'over' : ''}">${ty.title.length}/80</span>`
+          : `<span class="t">${esc(r.t)}</span>`;
+        return `${title}<span class="s"><span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)} · ${esc(r.sku || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(r.id)}" target="_blank" rel="noopener">${esc(r.id)}</a>${ty.title == null ? ` · <button class="link" type="button" data-edtitle="${esc(edKey(r))}">Edit title</button>` : ''}</span>`; } },
+    { h: 'Price', v: r => r.price ?? 0, f: r => { const t = edTyped.get(edKey(r))?.price; return `<input type="number" class="cell-in ${t != null ? 'changed' : ''}" data-k="${esc(edKey(r))}" data-f="price" step="0.01" min="0.99" value="${t ?? r.price ?? ''}" aria-label="Price for ${esc(r.sku || r.id)}">`; } },
+    { h: 'Stock', v: r => r.qty ?? 0, f: r => { const t = edTyped.get(edKey(r))?.qty; return `<input type="number" class="cell-in ${t != null ? 'changed' : ''}" style="width:70px" data-k="${esc(edKey(r))}" data-f="qty" step="1" min="0" value="${t ?? r.qty ?? ''}" aria-label="Stock for ${esc(r.sku || r.id)}">`; } },
+    { h: 'Sold', v: r => r.sold, f: r => n0(r.sold) },
+    { h: 'Cost', v: r => r.pp ? r.pp.c.c : -1, f: r => r.pp ? gbp(r.pp.c.c) + (r.pp.c.src === 'band' ? '<span class="sub">price band</span>' : '') : '<span class="neg">none</span>' },
+    { h: 'Profit / sale', v: r => r.pp ? r.pp.p : -1e9, f: r => r.pp ? `<b>${money(r.pp.p)}</b><span class="sub">fees ${(r.pp.fee * 100).toFixed(0)}% · ads ${(r.pp.ad * 100).toFixed(0)}%${r.pp.post ? ' · post £' + r.pp.post.toFixed(2) : ''}</span>` : '–' },
+    { h: 'Views 30d', v: r => r.tr ? r.tr.v : -1, f: r => r.tr ? `${n0(r.tr.v)}<span class="sub">${n0(r.tr.imp)} impr.</span>` : '–' },
+    { h: 'Traffic', l: 1, v: r => r.tr?.flag || '', f: r => r.tr && r.tr.flag ? `<span class="chip ${FLAGS[r.tr.flag].chip}">${FLAGS[r.tr.flag].name}</span>` : '' }];
+  table($('edList'), cols, rows, null, edLState);
+  $('edListMore').hidden = rows.length <= edLState.limit;
+  const L = $('edList');
+  L.querySelectorAll('.el-sel').forEach(b => b.onchange = () => { b.checked ? edOff.delete(b.dataset.k) : edOff.add(b.dataset.k); const n = rows.filter(r => !edOff.has(edKey(r))).length; $('edCount').textContent = `${n0(rows.length)} listings · ${n0(n)} ticked`; });
+  L.querySelectorAll('[data-edtitle]').forEach(b => b.onclick = () => {
+    const r = rows.find(x => edKey(x) === b.dataset.edtitle); const ty = edTyped.get(edKey(r)) || {}; ty.title = r.t; edTyped.set(edKey(r), ty); drawList();
+    const inp = L.querySelector(`.title-in[data-k="${CSS.escape(edKey(r))}"]`); if (inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+  });
+  L.querySelectorAll('.cell-in,.title-in').forEach(inp => {
+    const set = () => {
+      const r = rows.find(x => edKey(x) === inp.dataset.k), fld = inp.dataset.f, ty = edTyped.get(inp.dataset.k) || {};
+      const cur = fld === 'price' ? r.price : fld === 'qty' ? r.qty : r.t;
+      let v = fld === 'title' ? inp.value : inp.value === '' ? null : +inp.value;
+      if (fld === 'price' && v != null) v = round2(v); if (fld === 'qty' && v != null) v = Math.max(0, Math.round(v));
+      if (v == null || v === cur) delete ty[fld]; else ty[fld] = v;
+      edTyped.set(inp.dataset.k, ty); return fld;
+    };
+    inp.addEventListener('input', () => {
+      const fld = set(); inp.classList.toggle('changed', edTyped.get(inp.dataset.k)?.[fld] != null);
+      if (fld === 'title') { const l = inp.nextElementSibling; l.textContent = `${inp.value.length}/80`; l.classList.toggle('over', inp.value.length > 80); }
+      const n = [...edTyped.values()].filter(v => Object.keys(v).length).length; $('edTypedBtn').disabled = !n; $('edTypedBtn').textContent = n ? `Review typed changes (${n})` : 'Review typed changes';
+    });
+    if (inp.dataset.f !== 'title') inp.addEventListener('change', () => { set(); drawList(); });  // refresh the profit column
+  });
+}
+['edPrefix', 'edSearch'].forEach(id => $(id).addEventListener('input', () => { $('edPrevPanel').hidden = true; edLState.limit = 100; drawList(); }));
+['edStock', 'edTraffic'].forEach(id => $(id).addEventListener('change', () => { $('edPrevPanel').hidden = true; edLState.limit = 100; drawList(); }));
+$('edAd').addEventListener('change', () => EL && drawList());
+$('edListMore').onclick = () => { edLState.limit += 200; drawList(); };
+$('edNone').onclick = () => { edPicked().forEach(r => edOff.add(edKey(r))); drawList(); };
+$('edAllOn').onclick = () => { edPicked().forEach(r => edOff.delete(edKey(r))); drawList(); };
+
+function edShowPreview(out, same, what) {
+  edRows = out.sort((x, y) => y.ok - x.ok); edState.limit = 200;
+  const blocked = out.filter(r => !r.ok).length;
+  $('edPrevPanel').hidden = false;
+  $('edPrevSub').textContent = `${n0(out.length)} ${what}` + (same ? ` · ${n0(same)} already right, left as they are` : '') + (blocked ? ` · ${n0(blocked)} can't be changed (see notes)` : '') + '. Untick any you want to leave.';
+  drawEdit(); $('edPrevPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+$('edTypedBtn').onclick = () => {
+  const pf = edProfitFn(), byKey = new Map(EL.rows.map(r => [r[0] + '|' + r[1], { a: AIDX[r[0]], aid: r[0], id: r[1], sku: r[2], g: r[3], t: r[4], price: r[5], qty: r[6], sold: r[7], ad: r[8] }]));
+  const out = [];
+  edTyped.forEach((ty, k) => {
+    const r = byKey.get(k); if (!r) return;
+    if (ty.price != null) { const p0 = pf(r, r.price || 0), p1 = pf(r, ty.price); out.push({ ...r, fld: 'price', cur: r.price, nv: ty.price, ok: ty.price >= 0.99, note: ty.price < 0.99 ? 'eBay\'s minimum is £0.99' : p0 && p1 ? `Profit about ${gbp(p0.p)} → ${gbp(p1.p)}` : p1 ? `Profit about ${gbp(p1.p)}` : 'No cost at this price, so profit unknown' }); }
+    if (ty.qty != null) out.push({ ...r, fld: 'qty', cur: r.qty, nv: ty.qty, ok: true, note: ty.qty === 0 ? 'Shows as out of stock' : '' });
+    if (ty.title != null && ty.title.trim() !== r.t) { const t = ty.title.replace(/\s{2,}/g, ' ').trim(); out.push({ ...r, fld: 'title', cur: r.t, nv: t, ok: t.length > 0 && t.length <= 80, note: `${t.length} characters` + (t.length > 80 ? ", over eBay's 80" : '') }); }
+  });
+  if (!out.length) return toast('Type a new price, stock or title in a row first.');
+  edMode = 'typed'; edShowPreview(out, 0, 'changes you typed');
+};
 
 $('edPreview').onclick = () => {
-  const picked = edPicked(), fld = $('edField').value;
-  if (!picked.length) return toast('No listings match. Change the filters in step 1.');
-  const R = edRates(), cmap = COGSBY(), out = [];
+  const picked = edPicked().filter(r => !edOff.has(edKey(r))), fld = $('edField').value;
+  if (!picked.length) return toast('No listings are ticked in step 1.');
+  const pf = edProfitFn(), out = [];
   let same = 0;
-  const profitAt = (r, p) => { const c = costAt(cmap, r.sku, p); if (!c) return null; return p * (1 - R.fee(r.a) - (r.adr || 0)) - c.c - R.post(r.sku, r.g); };
   for (const r of picked) {
     let nv = null, note = '', ok = true, old = null;
     if (fld === 'price') {
       const how = $('edPriceHow').value, v = +$('edPriceVal').value || 0, cur = r.price || 0; old = cur;
-      r.adr = (how === 'profit' ? (+$('edAd').value || 0) : (r.ad != null ? r.ad : +$('edAd').value || 0)) / 100;
       if (how === 'profit') {
-        const fr = R.fee(r.a), po = R.post(r.sku, r.g), k = 1 - fr - r.adr;
-        let c = costAt(cmap, r.sku, cur);
-        if (!c) { out.push({ ...r, cur, nv: null, ok: false, note: 'No cost for this SKU. Add it on the COGS page.' }); continue; }
+        const ad = (+$('edAd').value || 0) / 100, fr = pf.R.fee(r.a), po = pf.R.post(r.sku, r.g), k = 1 - fr - ad;
+        let c = costAt(pf.cmap, r.sku, cur);
+        if (!c) { out.push({ ...r, fld, cur, nv: null, ok: false, note: 'No cost for this SKU. Add it on the COGS page.' }); continue; }
         let p = cur;
-        for (let i = 0; i < 4; i++) { c = costAt(cmap, r.sku, p) || c; p = (v + c.c + po) / k; }
+        for (let i = 0; i < 4; i++) { c = costAt(pf.cmap, r.sku, p) || c; p = (v + c.c + po) / k; }
         p = $('ed99').checked ? to99up(p) : Math.ceil(p * 100) / 100;
         if ($('edRaise').checked && p <= cur) { same++; continue; }
         nv = p;
-        note = `Cost £${c.c.toFixed(2)}${c.src === 'band' ? ' (price band)' : ''} · postage £${po.toFixed(2)} · fees ${(fr * 100).toFixed(1)}% · ads ${(r.adr * 100).toFixed(1)}%`;
+        note = `Cost £${c.c.toFixed(2)}${c.src === 'band' ? ' (price band)' : ''} · postage £${po.toFixed(2)} · fees ${(fr * 100).toFixed(1)}% · ads ${(ad * 100).toFixed(1)}%`;
       } else {
         nv = how === 'set' ? v : how === 'pct' ? cur * (1 + v / 100) : cur + v;
         nv = $('ed99').checked && how !== 'set' ? to99(nv) : round2(nv);
       }
       if (nv < 0.99) { nv = 0.99; note = 'Raised to eBay\'s minimum £0.99'; }
       if (Math.abs(nv - cur) < 0.005) { same++; continue; }
-      const p0 = profitAt(r, cur), p1 = profitAt(r, nv);
-      if (p0 != null) note = `Profit about ${gbp(p0)} → ${gbp(p1)}` + (note ? ' · ' + note : '');
+      const p0 = pf(r, cur), p1 = pf(r, nv);
+      if (p0 && p1) note = `Profit about ${gbp(p0.p)} → ${gbp(p1.p)}` + (note ? ' · ' + note : '');
     } else if (fld === 'qty') {
       nv = Math.max(0, Math.round(+$('edQty').value || 0)); old = r.qty;
       if (nv === r.qty) { same++; continue; }
@@ -559,24 +639,20 @@ $('edPreview').onclick = () => {
       nv = { name, value: val, mode: $('edSpecMode').value };
       note = nv.mode === 'missing' ? 'Skipped when applying if the listing already has it' : 'Replaces any value it has now';
     }
-    out.push({ ...r, cur: old, nv, ok, note });
+    out.push({ ...r, fld, cur: old, nv, ok, note });
   }
-  edRows = out.sort((x, y) => y.ok - x.ok); edState.limit = 200;
-  const blocked = out.filter(r => !r.ok).length;
-  $('edPrevPanel').hidden = false;
-  const lbl = { price: 'price', qty: 'quantity', title: 'title', specific: 'item specific' }[fld];
-  $('edPrevSub').textContent = `${n0(out.length)} listings get a new ${lbl}` + (same ? ` · ${n0(same)} already right, left as they are` : '') + (blocked ? ` · ${n0(blocked)} can't be changed (see notes)` : '') + '. Untick any you want to leave.';
-  drawEdit(); $('edPrevPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  edMode = 'bulk';
+  edShowPreview(out, same, `listings get a new ${{ price: 'price', qty: 'quantity', title: 'title', specific: 'item specific' }[fld]}`);
 };
+const FLD_NAME = { price: 'Price', qty: 'Stock', title: 'Title', specific: 'Item specific' };
 function edFmt(fld, v) { return v == null ? '–' : fld === 'price' ? gbp(v) : fld === 'qty' ? n0(v) : fld === 'specific' ? `${esc(v.name)}: <b>${esc(v.value)}</b>` : esc(v); }
 function drawEdit() {
-  const fld = $('edField').value;
   const cols = [
-    { h: `<input type="checkbox" id="edAll" aria-label="Select all" checked>`, l: 1, v: () => 0, f: r => `<input type="checkbox" class="ed-sel" data-k="${r.aid}|${esc(r.id)}" ${r.ok ? 'checked' : 'disabled'} aria-label="Select ${esc(r.sku || r.id)}">` },
-    { h: 'Listing', l: 1, cl: 'prod', v: r => r.sku, f: r => `<span class="t">${esc(r.t)}</span><span class="s"><span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)} · ${esc(r.sku || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(r.id)}" target="_blank" rel="noopener">${esc(r.id)}</a></span>` },
-    ...(fld === 'title' ? [{ h: 'New title', l: 1, cl: 'prod', v: r => r.nv || '', f: r => `<span class="oldv">${esc(r.cur)}</span><span class="t">${esc(r.nv)}</span>` }]
-      : [{ h: 'Now', v: r => r.cur ?? 0, f: r => fld === 'specific' ? '<span class="muted">read when applied</span>' : edFmt(fld, r.cur) },
-         { h: 'New', v: r => typeof r.nv === 'number' ? r.nv : 0, f: r => `<b>${edFmt(fld, r.nv)}</b>` }]),
+    { h: `<input type="checkbox" id="edAll" aria-label="Select all" checked>`, l: 1, v: () => 0, f: r => `<input type="checkbox" class="ed-sel" data-k="${r.aid}|${esc(r.id)}|${r.fld}" ${r.ok ? 'checked' : 'disabled'} aria-label="Select ${esc(r.sku || r.id)}">` },
+    { h: 'Listing', l: 1, cl: 'prod', v: r => r.sku, f: r => `<span class="t">${esc(r.fld === 'title' ? r.cur : r.t)}</span><span class="s"><span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)} · ${esc(r.sku || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(r.id)}" target="_blank" rel="noopener">${esc(r.id)}</a></span>` },
+    { h: 'Change', l: 1, v: r => r.fld, f: r => FLD_NAME[r.fld] },
+    { h: 'Now', l: 1, cl: 'prod', v: r => typeof r.cur === 'number' ? r.cur : String(r.cur ?? ''), f: r => r.fld === 'specific' ? '<span class="muted">read when applied</span>' : r.fld === 'title' ? `<span class="oldv">${esc(r.cur)}</span>` : edFmt(r.fld, r.cur) },
+    { h: 'New', l: 1, cl: 'prod', v: r => typeof r.nv === 'number' ? r.nv : String(r.nv ?? ''), f: r => `<b>${edFmt(r.fld, r.nv)}</b>` },
     { h: 'Notes', l: 1, cl: 'prod', v: r => r.note, f: r => `<span class="${r.ok ? 'muted' : 'neg'}">${esc(r.note)}</span>` }];
   table($('edTable'), cols, edRows, null, edState);
   $('edMore').hidden = edRows.length <= edState.limit;
@@ -587,29 +663,34 @@ function edChosen() {
   const on = new Set([...document.querySelectorAll('.ed-sel:checked')].map(b => b.dataset.k));
   // rows beyond "Show more" aren't drawn yet: they count as ticked unless they can't be applied
   const drawn = new Set([...document.querySelectorAll('.ed-sel')].map(b => b.dataset.k));
-  return edRows.filter(r => r.ok && (on.has(r.aid + '|' + r.id) || !drawn.has(r.aid + '|' + r.id)));
+  const k = r => `${r.aid}|${r.id}|${r.fld}`;
+  return edRows.filter(r => r.ok && (on.has(k(r)) || !drawn.has(k(r))));
 }
-function edSel() { $('edSel').textContent = `${n0(edChosen().length)} selected`; }
+function edSel() { const ch = edChosen(); $('edSel').textContent = `${n0(ch.length)} selected`; }
 $('edMore').onclick = () => { edState.limit += 500; drawEdit(); };
-$('edCsv').onclick = () => csv('bulk-edit-preview.csv', ['Account', 'Item number', 'SKU', 'Title', 'Now', 'New', 'Notes'],
-  edRows.map(r => [ACC[r.a].name, r.id, r.sku, r.t, typeof r.cur === 'object' ? '' : r.cur, typeof r.nv === 'object' && r.nv ? `${r.nv.name}: ${r.nv.value}` : r.nv, r.note]));
+$('edCsv').onclick = () => csv('bulk-edit-preview.csv', ['Account', 'Item number', 'SKU', 'Title', 'Change', 'Now', 'New', 'Notes'],
+  edRows.map(r => [ACC[r.a].name, r.id, r.sku, r.t, FLD_NAME[r.fld], typeof r.cur === 'object' ? '' : r.cur, typeof r.nv === 'object' && r.nv ? `${r.nv.name}: ${r.nv.value}` : r.nv, r.note]));
 $('edApply').onclick = async () => {
   const b = $('edApply'), ch = edChosen(), fld = $('edField').value;
-  if (!ch.length) return toast('Select at least one listing.');
-  if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = `Click again to change ${n0(ch.length)} live listings`; setTimeout(() => { b.dataset.sure = ''; b.textContent = 'Apply to eBay'; }, 6000); return; }
+  if (!ch.length) return toast('Select at least one change.');
+  const nList = new Set(ch.map(x => x.aid + '|' + x.id)).size;
+  if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = `Click again to change ${n0(nList)} live listings`; setTimeout(() => { b.dataset.sure = ''; b.textContent = 'Apply to eBay'; }, 6000); return; }
   b.dataset.sure = ''; b.textContent = 'Apply to eBay';
-  const summary = fld === 'price' ? { profit: `Price: profit at least £${$('edPriceVal').value} after ${$('edAd').value}% ads`, pct: `Price ${$('edPriceVal').value}%`, add: `Price ${$('edPriceVal').value >= 0 ? '+' : ''}£${$('edPriceVal').value}`, set: `Price set to £${$('edPriceVal').value}` }[$('edPriceHow').value]
+  const summary = edMode === 'typed' ? `Typed changes on ${nList} listing${nList === 1 ? '' : 's'}`
+    : fld === 'price' ? { profit: `Price: profit at least £${$('edPriceVal').value} after ${$('edAd').value}% ads`, pct: `Price ${$('edPriceVal').value}%`, add: `Price ${$('edPriceVal').value >= 0 ? '+' : ''}£${$('edPriceVal').value}`, set: `Price set to £${$('edPriceVal').value}` }[$('edPriceHow').value]
     : fld === 'qty' ? `Quantity set to ${$('edQty').value}` : fld === 'title' ? `Title: ${$('edTitleHow').selectedOptions[0].text.toLowerCase()} "${$('edTitleHow').value === 'replace' ? $('edFind').value + '" → "' + $('edRepl').value : $('edRepl').value}"`
     : `${$('edSpecName').value} = ${$('edSpecVal').value} (${$('edSpecMode').value === 'missing' ? 'where missing' : 'all'})`;
   try {
-    const r = await post('/api/edit/jobs', { summary, changes: ch.map(x => ({ account_id: x.aid, item_id: x.id, sku: x.sku, title: x.t, field: fld, old: x.cur, new: x.nv })) });
-    toast('Sending changes to eBay…'); $('edPrevPanel').hidden = true; EL = null; showEditJob(r.job);
+    const r = await post('/api/edit/jobs', { summary, changes: ch.map(x => ({ account_id: x.aid, item_id: x.id, sku: x.sku, title: x.t, field: x.fld, old: x.cur, new: x.nv })) });
+    toast('Sending changes to eBay…'); $('edPrevPanel').hidden = true;
+    if (edMode === 'typed') ch.forEach(x => { const ty = edTyped.get(x.aid + '|' + x.id); if (ty) delete ty[x.fld]; });
+    EL = null; showEditJob(r.job); renderEdit();
   } catch (e) { toast(e.message); }
 };
 async function renderEditJobs() {
   const jobs = await api('/api/edit/jobs');
   $('edJobs').innerHTML = jobs.length ? `<thead><tr><th class="l">#</th><th class="l">When</th><th class="l">Change</th><th>Listings</th><th>Changed</th><th>Skipped</th><th>Failed</th><th class="l">Status</th><th></th></tr></thead><tbody>${jobs.slice(0, 15).map(j => `<tr>
-    <td class="l">${j.id}</td><td class="l">${esc(j.created_at.slice(0, 16))}</td><td class="l prod">${esc(j.summary)}<span class="s">${esc(j.created_by || '')}</span></td>
+    <td class="l">${j.id}</td><td class="l">${esc(j.created_at.slice(0, 16))}</td><td class="l prod">${esc(j.summary)}<span class="sub">${esc(j.created_by || '')}</span></td>
     <td>${j.total}</td><td>${j.ok}</td><td>${j.skipped}</td><td>${j.failed}</td>
     <td class="l">${j.status === 'running' || j.status === 'queued' ? `<span class="chip b">Working ${j.done}/${j.total}</span>` : j.undone_by ? `<span class="chip ret">Undone by #${j.undone_by}</span>` : `<span class="chip k">${esc(j.status)}</span>`}</td>
     <td><button class="link" type="button" data-edshow="${j.id}">Details</button>${j.status === 'finished' && j.ok && !j.undone_by ? ` <button class="link danger" type="button" data-edundo="${j.id}">Undo</button>` : ''}</td></tr>`).join('')}</tbody>`

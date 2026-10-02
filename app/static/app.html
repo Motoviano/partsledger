@@ -85,17 +85,24 @@
 
     <section id="p-edit" data-p hidden>
       <div class="panel">
-        <div class="panel-head"><div><h2>1. Choose listings</h2><p>Active listings on connected accounts. The account and product group filters above apply too.</p></div></div>
+        <div class="panel-head"><div><h2>1. Choose listings</h2><p>Active listings on connected accounts. The account and product group filters above apply too. Tick the listings to change, or type a new price, stock or title straight into a row.</p></div></div>
         <div class="form-row">
           <div class="f"><label for="edPrefix">SKU starts with</label><input type="text" id="edPrefix" style="width:120px" placeholder="e.g. GRLL"></div>
           <div class="f"><label for="edSearch">Title or SKU contains</label><input type="text" id="edSearch" style="width:200px" placeholder="e.g. Transit"></div>
           <div class="f"><label for="edStock">Stock</label><select id="edStock"><option value="in">In stock</option><option value="all">All</option><option value="out">Out of stock</option></select></div>
           <div class="f"><label for="edTraffic">Traffic (last 30 days)</label><select id="edTraffic"><option value="">Any</option><option value="attn">Needs attention</option><option value="noimp">No impressions</option><option value="lowctr">Seen, rarely clicked</option><option value="nosale">Views, no sales</option><option value="sell">Selling</option></select></div>
-          <span class="muted" id="edCount" style="padding-bottom:9px"></span>
         </div>
+        <div class="form-row" style="padding-top:0">
+          <span class="muted" id="edCount"></span>
+          <button class="btn" type="button" id="edNone">Untick all</button>
+          <button class="btn" type="button" id="edAllOn">Tick all</button>
+          <button class="btn primary" type="button" id="edTypedBtn" disabled>Review typed changes</button>
+        </div>
+        <div class="tbl-wrap"><table id="edList"></table></div>
+        <div class="more"><button class="btn" id="edListMore" type="button">Show more</button></div>
       </div>
       <div class="panel" style="margin-top:14px">
-        <div class="panel-head"><div><h2>2. Choose the change</h2><p id="edHelp"></p></div></div>
+        <div class="panel-head"><div><h2>2. Or change all ticked listings at once</h2><p id="edHelp"></p></div></div>
         <div class="form-row">
           <div class="f"><label for="edField">Change</label><select id="edField"><option value="price">Price</option><option value="qty">Quantity</option><option value="title">Title</option><option value="specific">Item specific</option></select></div>
           <div class="ed-opt" data-for="price">
