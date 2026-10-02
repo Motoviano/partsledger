@@ -450,6 +450,72 @@ def run_ad_job(db_factory, account_id):
                             ("done" if ok else "failed", msg, account_id, it))
 
 
+# ------------------------------------------------------------------ Digital signatures (required by eBay for UK/EU sellers on the Finances API)
+SCHEMA += """
+CREATE TABLE IF NOT EXISTS ebay_signing_key(
+  id INTEGER PRIMARY KEY CHECK (id=1), signing_key_id TEXT, private_key TEXT NOT NULL, jwe TEXT NOT NULL,
+  expires REAL, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+"""
+KEY_URL = "https://apiz.ebay.com/developer/key_management/v1/signing_key"
+
+
+def app_token():
+    j = _token_request({"grant_type": "client_credentials", "scope": "https://api.ebay.com/oauth/api_scope"})
+    return j["access_token"]
+
+
+def _load_private_key(text):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    t = (text or "").strip()
+    if "BEGIN" in t:
+        return serialization.load_pem_private_key(t.encode(), password=None)
+    raw = base64.b64decode(t + "=" * (-len(t) % 4))
+    if len(raw) == 32:
+        return Ed25519PrivateKey.from_private_bytes(raw)
+    return serialization.load_der_private_key(raw, password=None)
+
+
+def signing_key(con):
+    """The app's signing key; created through eBay's Key Management API the first time it's needed."""
+    r = con.execute("SELECT * FROM ebay_signing_key WHERE id=1").fetchone()
+    if r and (r["expires"] or 0) > time.time() + 7 * 86400:
+        return r["private_key"], r["jwe"]
+    st, j = _rest("POST", KEY_URL, app_token(), {"signingKeyCipher": "ED25519"})
+    if st not in (200, 201) or not j.get("privateKey") or not j.get("jwe"):
+        raise EbayError("Couldn't create eBay's signing key: " + _err(j, str(st)))
+    con.execute("INSERT OR REPLACE INTO ebay_signing_key(id,signing_key_id,private_key,jwe,expires) VALUES(1,?,?,?,?)",
+                (j.get("signingKeyId"), j["privateKey"], j["jwe"], float(j.get("expirationTime") or time.time() + 3 * 365 * 86400)))
+    con.commit()
+    return j["privateKey"], j["jwe"]
+
+
+def signature_headers(private_key, jwe, method, url, body=None):
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ed25519, padding
+    u = urllib.parse.urlsplit(url)
+    created = int(time.time())
+    comps, lines, h = [], [], {"x-ebay-signature-key": jwe}
+    if body:
+        digest = "sha-256=:" + base64.b64encode(hashlib.sha256(body).digest()).decode() + ":"
+        h["Content-Digest"] = digest
+        comps.append('"content-digest"')
+        lines.append(f'"content-digest": {digest}')
+    comps += ['"x-ebay-signature-key"', '"@method"', '"@path"', '"@authority"']
+    lines += [f'"x-ebay-signature-key": {jwe}', f'"@method": {method.upper()}', f'"@path": {u.path}', f'"@authority": {u.netloc}']
+    params = f'({" ".join(comps)});created={created}'
+    lines.append(f'"@signature-params": {params}')
+    base = "\n".join(lines).encode()
+    key = _load_private_key(private_key)
+    if isinstance(key, ed25519.Ed25519PrivateKey):
+        sig = key.sign(base)
+    else:
+        sig = key.sign(base, padding.PKCS1v15(), hashes.SHA256())
+    h["Signature-Input"] = f"sig1={params}"
+    h["Signature"] = "sig1=:" + base64.b64encode(sig).decode() + ":"
+    return h
+
+
 # ------------------------------------------------------------------ Sync: orders, money movements, listings
 FIN = "https://apiz.ebay.com/sell/finances/v1"
 FUL = "https://api.ebay.com/sell/fulfillment/v1"
@@ -465,10 +531,12 @@ FEE_NAMES = {"AD_FEE": "Promoted Listings - General fee", "INSERTION_FEE": "Inse
              "FINAL_VALUE_FEE_FIXED_PER_ORDER": "Final value fee", "REGULATORY_OPERATING_FEE": "Regulatory operating fee"}
 
 
-def _get_json(url, token, marketplace=True):
+def _get_json(url, token, marketplace=True, sign=None):
     h = {"Authorization": "Bearer " + token, "Accept": "application/json"}
     if marketplace:
         h["X-EBAY-C-MARKETPLACE-ID"] = "EBAY_GB"
+    if sign:
+        h.update(signature_headers(sign[0], sign[1], "GET", url))
     st, raw = _http(url, None, h, "GET", timeout=120)
     try:
         j = json.loads(raw or b"{}")
@@ -483,11 +551,11 @@ def _iso(d, end=False):
     return d + ("T23:59:59.999Z" if end else "T00:00:00.000Z")
 
 
-def fetch_transactions(token, start, end):
+def fetch_transactions(token, start, end, sign=None):
     out, offset = [], 0
     while True:
         q = urllib.parse.urlencode({"filter": f"transactionDate:[{_iso(start)}..{_iso(end, True)}]", "limit": 1000, "offset": offset})
-        j = _get_json(f"{FIN}/transaction?{q}", token)
+        j = _get_json(f"{FIN}/transaction?{q}", token, sign=sign)
         rows = j.get("transactions") or []
         out += rows
         if len(rows) < 1000:
@@ -610,14 +678,15 @@ def sync_account(db_factory, account_id, days_back=3, listings=True):
             start_floor = (_dt.date.fromisoformat(last_csv) + _dt.timedelta(days=1)).isoformat() if last_csv else (today - _dt.timedelta(days=90)).isoformat()
             con.execute("INSERT OR REPLACE INTO sync_state(account_id,synced_from) VALUES(?,?)", (account_id, start_floor))
         tok = access_token(con, account_id)
+        sign = signing_key(con)
     start = max(start_floor, (today - _dt.timedelta(days=days_back)).isoformat())
-    if st is None or not st["last_tx_sync"]:
-        start = start_floor  # first run: catch up everything since the last upload
+    if st is None or not st["last_tx_sync"] or st["last_status"] != "ok":
+        start = start_floor  # first run, or after a failed run: catch up everything since the last upload
     end = today.isoformat()
     added = skipped = 0
     msg = []
     if start <= end:
-        tx = fetch_transactions(tok, start, end)
+        tx = fetch_transactions(tok, start, end, sign)
         order_ids = {t.get("orderId") for t in tx if t.get("transactionType") == "SALE"}
         orders = fetch_orders(tok, (_dt.date.fromisoformat(start) - _dt.timedelta(days=30)).isoformat(), end) if order_ids else []
         rows = to_rows(tx, orders)
