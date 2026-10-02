@@ -548,7 +548,12 @@ def _get_json(url, token, marketplace=True, sign=None):
 
 
 def _iso(d, end=False):
-    return d + ("T23:59:59.999Z" if end else "T00:00:00.000Z")
+    if end:
+        # eBay rejects end times in the future, so end "today" at the current moment (minus a little slack)
+        now = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() - 120))
+        e = d + "T23:59:59.999Z"
+        return min(e, now)
+    return d + "T00:00:00.000Z"
 
 
 def fetch_transactions(token, start, end, sign=None):
@@ -566,7 +571,7 @@ def fetch_transactions(token, start, end, sign=None):
 def fetch_orders(token, start, end):
     out, offset = [], 0
     while True:
-        q = urllib.parse.urlencode({"filter": f"creationdate:[{_iso(start)}..{_iso(end, True)}]", "limit": 200, "offset": offset})
+        q = urllib.parse.urlencode({"filter": f"creationdate:[{_iso(start)}..]", "limit": 200, "offset": offset})
         j = _get_json(f"{FUL}/order?{q}", token, marketplace=False)
         rows = j.get("orders") or []
         out += rows
@@ -702,7 +707,7 @@ def sync_account(db_factory, account_id, days_back=3, listings=True):
                      r["item_subtotal"], r["postage"], r["gross"], r["net"], r["description"]))
                 added += cur.rowcount
             skipped = len(rows) - added
-        msg.append(f"{added} new rows ({start} to {end})")
+        msg.append(f"{added} new rows from {len(tx)} eBay transactions and {len(orders)} orders ({start} to {end})")
     if listings:
         ls = fetch_listings(tok)
         with db_factory() as con:
