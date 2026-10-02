@@ -73,20 +73,54 @@ function totals(its, oh) {
 }
 
 // ---------------------------------------------------------------- tiles
+const TILESETS = {
+  tymfl: ['Today / Yesterday / Month to date / This month (forecast) / Last month', ['today', 'yday', 'mtd', 'fc', 'lm']],
+  tyml: ['Today / Yesterday / Month to date / Last month', ['today', 'yday', 'mtd', 'lm']],
+  ty71430: ['Today / Yesterday / 7 days / 14 days / 30 days', ['today', 'yday', 'd7', 'd14', 'd30']],
+  weeks: ['This week / Last week / 2 weeks ago / 3 weeks ago', ['tw', 'lw', 'w2', 'w3']],
+  months: ['Month to date / Last month / 2 months ago / 3 months ago', ['mtd', 'lm', 'm2', 'm3']],
+  days: ['Today / Yesterday / 2 days ago / 3 days ago', ['today', 'yday', 'dd2', 'dd3']],
+  days78: ['Today / Yesterday / 7 days ago / 8 days ago', ['today', 'yday', 'dd7', 'dd8']],
+  quarters: ['This quarter / Last quarter / 2 quarters ago / 3 quarters ago', ['q', 'lq', 'q2', 'q3']],
+};
+const TILE_COLORS = ['--t0', '--t1', '--t2', '--t3', '--t4'];
+function tileDef(k) {
+  const t = TODAY, y = +t.slice(0, 4), m = +t.slice(5, 7);
+  const mon = n => { const [yy, mm] = ym(y, m - n); return [first(yy, mm), mEnd(yy, mm)]; };
+  const qtr = n => { const [qy, qs] = ym(y, Math.floor((m - 1) / 3) * 3 + 1 - 3 * n); return [first(qy, qs), mEnd(...ym(qy, qs + 2))]; };
+  const wk = n => { const s = addD(monday(t), -7 * n); return [s, addD(s, 6)]; };
+  const day = n => [addD(t, -n), addD(t, -n)];
+  const last = n => [addD(t, -(n - 1)), t];
+  const D = {
+    today: ['Today', [t, t]], yday: ['Yesterday', day(1)], dd2: ['2 days ago', day(2)], dd3: ['3 days ago', day(3)],
+    dd7: ['7 days ago', day(7)], dd8: ['8 days ago', day(8)], d7: ['Last 7 days', last(7)], d14: ['Last 14 days', last(14)], d30: ['Last 30 days', last(30)],
+    mtd: ['Month to date', [first(y, m), t]], fc: ['This month (forecast)', [first(y, m), mEnd(y, m)]], lm: ['Last month', mon(1)], m2: ['2 months ago', mon(2)], m3: ['3 months ago', mon(3)],
+    tw: ['This week', [monday(t), t]], lw: ['Last week', wk(1)], w2: ['2 weeks ago', wk(2)], w3: ['3 weeks ago', wk(3)],
+    q: ['This quarter', [qtr(0)[0], t]], lq: ['Last quarter', qtr(1)], q2: ['2 quarters ago', qtr(2)], q3: ['3 quarters ago', qtr(3)],
+  };
+  return { key: k, name: D[k][0], r: D[k][1] };
+}
+let tileSet = 'tymfl', activeTile = null;
+try { tileSet = localStorage.getItem('pl_tiles') || 'tymfl'; } catch (e) { }
+function renderTileMenu() {
+  const sel = $('tileSet'); if (!sel) return;
+  sel.innerHTML = Object.entries(TILESETS).map(([k, v]) => `<option value="${k}" ${k === tileSet ? 'selected' : ''}>${v[0]}</option>`).join('');
+}
 function renderTiles() {
-  const f = F();
-  const defs = [['This week', 'tw', '--t0'], ['Last week', 'lw', '--t1'], ['Month to date', 'mtd', '--t2'], ['Month forecast', 'fc', '--t3'], ['Last month', 'lm', '--t4']];
-  const lm = totals(itemsIn(f, range('lm')), ohIn(f, range('lm')));
-  $('tiles').innerHTML = defs.map(([name, key, col]) => {
-    const r = key === 'fc' ? range('mtd') : range(key); let T = totals(itemsIn(f, r), ohIn(f, r)), sub = `${nice(r[0])} – ${nice(r[1])}`;
-    if (key === 'fc') {
-      const day = +TODAY.slice(8, 10), days = +mEnd(+TODAY.slice(0, 4), +TODAY.slice(5, 7)).slice(8, 10), k = days / day;
-      ['sales', 'units', 'orders', 'fee', 'ad', 'po', 'rf', 'cogs', 'back', 'gross', 'net', 'ret', 'oh'].forEach(p => T[p] *= k);
-      sub = 'This month at the current daily pace';
-    }
-    const d = key === 'fc' && lm.net ? (T.net - lm.net) / Math.abs(lm.net) : null;
-    return `<article class="tile" style="--hd:var(${col})"><header><b>${name}</b><span>${sub}</span></header><div class="body">
-      <div class="kv big"><small>Sales</small><b>${gbp(T.sales)}</b></div>
+  const f = F(), keys = (TILESETS[tileSet] || TILESETS.tymfl)[1];
+  const lmR = tileDef('lm').r, lm = totals(itemsIn(f, lmR), ohIn(f, lmR));
+  $('tiles').style.gridTemplateColumns = `repeat(${keys.length},minmax(0,1fr))`;
+  $('tiles').innerHTML = keys.map((k, i) => {
+    const td = tileDef(k); let T, sub = td.r[0] === td.r[1] ? nice(td.r[0]) : `${nice(td.r[0])} – ${nice(td.r[1])}`;
+    if (k === 'fc') {
+      const mt = [td.r[0], TODAY]; T = totals(itemsIn(f, mt), ohIn(f, mt));
+      const day = +TODAY.slice(8, 10), days = +td.r[1].slice(8, 10), mult = days / day;
+      ['sales', 'units', 'orders', 'fee', 'ad', 'po', 'rf', 'cogs', 'back', 'gross', 'net', 'ret', 'oh'].forEach(p => T[p] *= mult);
+    } else T = totals(itemsIn(f, td.r), ohIn(f, td.r));
+    const d = (k === 'fc' || k === 'mtd') && lm.sales ? (T.sales - lm.sales) / Math.abs(lm.sales) : null;
+    return `<article class="tile ${activeTile === k ? 'active' : ''}" style="--hd:var(${TILE_COLORS[i % 5]})" data-tile="${k}" tabindex="0" role="button" aria-label="Show ${td.name} in the product table">
+      <header><b>${td.name}</b><span>${sub}</span></header><div class="body">
+      <div class="kv big"><small>Sales${d != null ? ` <span class="delta ${d < 0 ? 'neg' : 'pos'}">${d >= 0 ? '+' : ''}${(d * 100).toFixed(1)}%</span>` : ''}</small><b>${gbp(T.sales)}</b></div>
       <div class="kv"><small>Orders / units</small><b>${n0(T.orders)} / ${n0(T.units)}</b></div>
       <div class="kv"><small>Returns</small><b>${n0(T.ret)}</b></div>
       <div class="kv"><small>eBay fees</small><b class="${cls(T.fee)}">${gbp(T.fee)}</b></div>
@@ -95,11 +129,18 @@ function renderTiles() {
       <div class="kv"><small>COGS (net of returns)</small><b class="neg">${gbp(-(T.cogs - T.back))}</b></div>
       <div class="kv"><small>Product profit</small><b>${gbp(T.gross)}</b></div>
       <div class="kv"><small>Other fees</small><b class="${cls(T.oh)}">${gbp(T.oh)}</b></div>
-      <div class="net"><small>Net profit${d != null ? `<span class="delta ${d < 0 ? 'neg' : 'pos'}">${d >= 0 ? '+' : ''}${(d * 100).toFixed(1)}% vs last month</span>` : ''}</small><b class="${cls(T.net)}">${gbp(T.net)}</b></div>
+      <div class="net"><small>Net profit${k === 'fc' ? '<span class="delta">at the current daily pace</span>' : ''}</small><b class="${cls(T.net)}">${gbp(T.net)}</b></div>
     </div></article>`;
   }).join('');
+  document.querySelectorAll('[data-tile]').forEach(el => {
+    const go = () => {
+      const td = tileDef(el.dataset.tile); activeTile = el.dataset.tile;
+      $('fPeriod').value = 'custom'; $('fFrom').value = td.r[0]; $('fTo').value = el.dataset.tile === 'fc' ? TODAY : td.r[1];
+      ordState.limit = 100; renderAll(); $('prodTable').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+    el.onclick = go; el.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
+  });
 }
-
 // ---------------------------------------------------------------- tables
 function table(el, cols, rows, foot, state) {
   const s = state.sort; if (s) { const c = cols[s.i]; rows.sort((a, b) => { const A = c.v(a), B = c.v(b); return (typeof A === 'string' ? A.localeCompare(B) : (A - B)) * (s.asc ? 1 : -1); }); }
@@ -302,13 +343,15 @@ async function renderEbay() {
   const setup = $('ebaySetup');
   setup.hidden = EBS.configured && !EBS.missing.length;
   setup.innerHTML = `The eBay keys aren't set yet. In Render, open partsledger → Environment and add: <b>${EBS.missing.map(esc).join(', ')}</b>. Then connect each account below.`;
-  $('ebayAcc').innerHTML = `<thead><tr><th class="l">Account</th><th class="l">Status</th><th class="l">Login valid until</th><th></th></tr></thead><tbody>${EBS.accounts.map(a => {
-    const c = a.connection;
+  $('ebayAcc').innerHTML = `<thead><tr><th class="l">Account</th><th class="l">Status</th><th class="l">Login valid until</th><th class="l">Last sync</th><th></th></tr></thead><tbody>${EBS.accounts.map(a => {
+    const c = a.connection, sy = a.sync;
     return `<tr><td class="l"><span class="dot" style="background:${a.color}"></span>${esc(a.name)}</td>
       <td class="l">${c ? `<span class="chip k">Connected as ${esc(c.ebay_user)}</span>` : '<span class="chip m">Not connected</span>'}</td>
       <td class="l">${c && c.refresh_expires ? nice(c.refresh_expires) : '–'}</td>
+      <td class="l prod">${sy && sy.last_tx_sync ? `${esc(sy.last_tx_sync.slice(0, 16))} UTC · ${sy.last_status === 'ok' ? '' : '<span class="chip m">Error</span> '}${esc(sy.last_message || '')}` : (c ? 'Waiting for first sync' : '–')}</td>
       <td>${ME.is_admin ? `<a class="btn" href="/ebay/connect/${a.id}">${c ? 'Reconnect' : 'Connect'}</a>${c ? ` <button class="link danger" type="button" data-disc="${a.id}">Disconnect</button>` : ''}` : ''}</td></tr>`;
   }).join('')}</tbody>`;
+  $('syncNow').hidden = !EBS.accounts.some(a => a.connection);
   document.querySelectorAll('[data-disc]').forEach(b => b.onclick = async () => {
     if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = 'Click again to disconnect'; return; }
     await api('/api/ebay/disconnect/' + b.dataset.disc, { method: 'POST' }); toast('Disconnected'); renderEbay();
@@ -361,6 +404,7 @@ async function startJob(mode) {
   } catch (e) { toast(e.message); }
 }
 $('cpVerify').onclick = () => startJob('verify');
+$('syncNow').onclick = async () => { try { await api('/api/ebay/sync', { method: 'POST' }); toast('Syncing with eBay… this takes a minute'); setTimeout(async () => { await load(); }, 45000); setTimeout(renderEbay, 8000); } catch (e) { toast(e.message); } };
 $('cpCopy').onclick = () => {
   const b = $('cpCopy'); if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = 'Click again to create the listings'; setTimeout(() => { b.dataset.sure = ''; b.textContent = 'Copy selected'; }, 6000); return; }
   b.dataset.sure = ''; b.textContent = 'Copy selected'; startJob('copy');
@@ -416,7 +460,7 @@ function renderAll() {
   if (!D) return;
   const f = F(); $('customDates').hidden = $('fPeriod').value !== 'custom';
   $('rangeNote').textContent = `${nice(f.r[0])} – ${nice(f.r[1])}` + (ACC.some(a => f.a.has(a.i) && !a.hasData) ? ' · some selected accounts have no data yet' : '') + (!f.allG ? ' · other fees hidden when filtering by group' : '');
-  if (page === 'dash') { renderTiles(); renderProducts(); }
+  if (page === 'dash') { renderTileMenu(); renderTiles(); renderProducts(); }
   if (page === 'orders') renderOrders();
   if (page === 'cogs') { renderBands(); renderCogs(); }
   if (page === 'charts') renderCharts();
@@ -424,7 +468,8 @@ function renderAll() {
   if (page === 'users') renderUsers();
   if (page === 'ebay') renderEbay();
 }
-['fPeriod', 'fFrom', 'fTo'].forEach(id => $(id).addEventListener('change', () => { ordState.limit = 100; renderAll(); }));
+['fPeriod', 'fFrom', 'fTo'].forEach(id => $(id).addEventListener('change', () => { ordState.limit = 100; activeTile = null; renderAll(); }));
+$('tileSet').onchange = e => { tileSet = e.target.value; try { localStorage.setItem('pl_tiles', tileSet); } catch (err) { } activeTile = null; renderTiles(); };
 ['prodSearch', 'ordSearch'].forEach(id => $(id).addEventListener('input', renderAll));
 new MutationObserver(() => page === 'charts' && renderCharts()).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => page === 'charts' && renderCharts());

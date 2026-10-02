@@ -51,6 +51,7 @@
     </form>
 
     <section id="p-dash" data-p hidden>
+      <div class="tile-bar"><label for="tileSet">Tiles</label><select id="tileSet"></select><span class="muted">Click a tile to see its products below.</span></div>
       <div class="tiles" id="tiles"></div>
       <div class="panel" style="margin-top:18px">
         <div class="panel-head"><div><h2>Products</h2><p id="prodSub"></p></div>
@@ -120,7 +121,8 @@
 
     <section id="p-ebay" data-p hidden>
       <div class="panel">
-        <div class="panel-head"><div><h2>eBay connections</h2><p>Connect each account once. Partsledger can then read listings and create new ones on it.</p></div></div>
+        <div class="panel-head"><div><h2>eBay connections</h2><p>Connected accounts sync every hour: orders, fees, ads, postage labels and refunds (listings every 6 hours).</p></div>
+          <button class="btn" type="button" id="syncNow" hidden>Sync now</button></div>
         <p class="notice" id="ebaySetup" style="margin:14px" hidden></p>
         <div class="tbl-wrap"><table id="ebayAcc"></table></div>
       </div>

@@ -173,3 +173,13 @@ body{margin:0}
 .drop.over{border-color:var(--accent);background:var(--accent-soft)}
 
 a.btn{text-decoration:none;display:inline-block}
+
+.tile-bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px;font-size:13px}
+.tile-bar label{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:600}
+.tile{cursor:pointer;transition:box-shadow .15s,transform .15s}
+.tile:hover{box-shadow:0 4px 14px rgba(20,30,25,.12)}
+.tile.active{outline:3px solid var(--accent);outline-offset:-1px}
+.tile:focus-visible{outline:3px solid var(--accent)}
+@media (max-width:1180px){.tiles{grid-template-columns:repeat(3,minmax(0,1fr))!important}}
+@media (max-width:860px){.tiles{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
+@media (max-width:520px){.tiles{grid-template-columns:1fr!important}}

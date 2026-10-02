@@ -448,3 +448,235 @@ def run_ad_job(db_factory, account_id):
                 ok, msg = res.get(it, (False, "No answer from eBay for this listing"))
                 con.execute("UPDATE ad_rates SET status=?, message=?, updated_at=CURRENT_TIMESTAMP WHERE account_id=? AND item_id=?",
                             ("done" if ok else "failed", msg, account_id, it))
+
+
+# ------------------------------------------------------------------ Sync: orders, money movements, listings
+FIN = "https://apiz.ebay.com/sell/finances/v1"
+FUL = "https://api.ebay.com/sell/fulfillment/v1"
+
+SCHEMA += """
+CREATE TABLE IF NOT EXISTS sync_state(
+  account_id INTEGER PRIMARY KEY, synced_from TEXT, last_tx_sync TEXT, last_listing_sync TEXT,
+  last_status TEXT, last_message TEXT);
+"""
+
+FEE_NAMES = {"AD_FEE": "Promoted Listings - General fee", "INSERTION_FEE": "Insertion fee",
+             "STORE_SUBSCRIPTION_FEE": "Shop subscription fee", "FINAL_VALUE_FEE": "Final value fee",
+             "FINAL_VALUE_FEE_FIXED_PER_ORDER": "Final value fee", "REGULATORY_OPERATING_FEE": "Regulatory operating fee"}
+
+
+def _get_json(url, token, marketplace=True):
+    h = {"Authorization": "Bearer " + token, "Accept": "application/json"}
+    if marketplace:
+        h["X-EBAY-C-MARKETPLACE-ID"] = "EBAY_GB"
+    st, raw = _http(url, None, h, "GET", timeout=120)
+    try:
+        j = json.loads(raw or b"{}")
+    except ValueError:
+        j = {}
+    if st >= 400:
+        raise EbayError(_err(j, f"eBay returned {st} for {url.split('?')[0].rsplit('/', 1)[-1]}"))
+    return j
+
+
+def _iso(d, end=False):
+    return d + ("T23:59:59.999Z" if end else "T00:00:00.000Z")
+
+
+def fetch_transactions(token, start, end):
+    out, offset = [], 0
+    while True:
+        q = urllib.parse.urlencode({"filter": f"transactionDate:[{_iso(start)}..{_iso(end, True)}]", "limit": 1000, "offset": offset})
+        j = _get_json(f"{FIN}/transaction?{q}", token)
+        rows = j.get("transactions") or []
+        out += rows
+        if len(rows) < 1000:
+            return out
+        offset += 1000
+
+
+def fetch_orders(token, start, end):
+    out, offset = [], 0
+    while True:
+        q = urllib.parse.urlencode({"filter": f"creationdate:[{_iso(start)}..{_iso(end, True)}]", "limit": 200, "offset": offset})
+        j = _get_json(f"{FUL}/order?{q}", token, marketplace=False)
+        rows = j.get("orders") or []
+        out += rows
+        if len(rows) < 200:
+            return out
+        offset += 200
+
+
+def fetch_listings(token):
+    out, page = [], 1
+    while True:
+        def b(root, page=page):
+            al = _el(root, "ActiveList")
+            _el(al, "Include", "true")
+            pg = _el(al, "Pagination")
+            _el(pg, "EntriesPerPage", "200")
+            _el(pg, "PageNumber", str(page))
+        r = trading("GetMyeBaySelling", token, b)
+        al = r.find(N + "ActiveList")
+        if al is None:
+            return out
+        for it in al.iter(N + "Item"):
+            q = int(it.findtext(N + "Quantity") or 0)
+            qa = it.findtext(N + "QuantityAvailable")
+            qa = int(qa) if qa is not None else q - int(it.findtext(f"{N}SellingStatus/{N}QuantitySold") or 0)
+            out.append({"item_id": it.findtext(N + "ItemID"), "sku": it.findtext(N + "SKU"), "title": it.findtext(N + "Title"),
+                        "price": float(it.findtext(f"{N}SellingStatus/{N}CurrentPrice") or it.findtext(f"{N}BuyItNowPrice") or 0),
+                        "qty": max(qa, 0), "category": None, "sold": int(it.findtext(f"{N}SellingStatus/{N}QuantitySold") or 0)})
+        pages = int(al.findtext(f"{N}PaginationResult/{N}TotalNumberOfPages") or 1)
+        if page >= pages:
+            return out
+        page += 1
+
+
+def _amt(o):
+    try:
+        return float((o or {}).get("value"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _signed(t):
+    a = _amt(t.get("amount")) or 0.0
+    return a if t.get("bookingEntry") == "CREDIT" else -a
+
+
+def _ref(t, kind):
+    for r in t.get("references") or []:
+        if r.get("referenceType") == kind:
+            return r.get("referenceId")
+    return None
+
+
+def to_rows(transactions, orders):
+    """Map API data onto the same rows the Transaction report CSV produces."""
+    lines = {}
+    for o in orders:
+        lines[o.get("orderId")] = o
+    rows = []
+    for t in transactions:
+        tid, typ = t.get("transactionId"), t.get("transactionType")
+        d = (t.get("transactionDate") or "")[:10]
+        if not d or typ in ("TRANSFER", "WITHDRAWAL", "LOAN_REPAYMENT") or t.get("transactionStatus") == "FAILED":
+            continue
+        net = round(_signed(t), 2)
+        oid = t.get("orderId") or _ref(t, "ORDER_ID")
+        base = {"date": d, "order_no": oid, "item_id": None, "title": None, "sku": None, "qty": None,
+                "item_subtotal": None, "postage": None, "gross": None, "net": net, "description": None}
+        if typ == "SALE":
+            gross = _amt(t.get("totalFeeBasisAmount"))
+            if gross is None:
+                gross = net + (_amt(t.get("totalFeeAmount")) or 0)
+            rows.append({**base, "type": "Order", "gross": round(gross, 2), "_key": ["api", tid, "h"]})
+            o = lines.get(oid) or {}
+            for i, li in enumerate(o.get("lineItems") or []):
+                rows.append({**base, "type": "Order", "net": None, "item_id": li.get("legacyItemId"), "sku": li.get("sku"),
+                             "title": li.get("title"), "qty": float(li.get("quantity") or 1),
+                             "item_subtotal": _amt(li.get("lineItemCost")),
+                             "postage": _amt((li.get("deliveryCost") or {}).get("shippingCost")) or 0.0,
+                             "_key": ["api", tid, "li", i]})
+        elif typ == "REFUND":
+            gross = _amt(t.get("totalFeeBasisAmount"))
+            rows.append({**base, "type": "Refund", "gross": -abs(gross) if gross else net, "_key": ["api", tid]})
+        elif typ == "SHIPPING_LABEL":
+            rows.append({**base, "type": "Postage label", "description": t.get("transactionMemo") or "Postage label", "_key": ["api", tid]})
+        elif typ == "DISPUTE":
+            rows.append({**base, "type": "Claim", "_key": ["api", tid]})
+        elif typ == "NON_SALE_CHARGE":
+            ft = t.get("feeType") or ""
+            rows.append({**base, "type": "Other fee", "item_id": _ref(t, "ITEM_ID"),
+                         "description": FEE_NAMES.get(ft, ft.replace("_", " ").capitalize() or "eBay fee"), "_key": ["api", tid]})
+        else:  # CREDIT, ADJUSTMENT
+            rows.append({**base, "type": "Adjustment", "description": typ.capitalize(), "_key": ["api", tid]})
+    return rows
+
+
+def sync_account(db_factory, account_id, days_back=3, listings=True):
+    """Pull recent money movements + orders (and listings) for one account."""
+    import datetime as _dt
+    from . import importers as IM
+    today = _dt.date.today()
+    with db_factory() as con:
+        st = con.execute("SELECT * FROM sync_state WHERE account_id=?", (account_id,)).fetchone()
+        if st and st["synced_from"]:
+            start_floor = st["synced_from"]
+        else:
+            # Start the day after the newest uploaded Transaction report, so nothing is counted twice
+            last_csv = con.execute("SELECT MAX(date) FROM transactions WHERE account_id=? AND row_key NOT LIKE 'api%'", (account_id,)).fetchone()[0]
+            start_floor = (_dt.date.fromisoformat(last_csv) + _dt.timedelta(days=1)).isoformat() if last_csv else (today - _dt.timedelta(days=90)).isoformat()
+            con.execute("INSERT OR REPLACE INTO sync_state(account_id,synced_from) VALUES(?,?)", (account_id, start_floor))
+        tok = access_token(con, account_id)
+    start = max(start_floor, (today - _dt.timedelta(days=days_back)).isoformat())
+    if st is None or not st["last_tx_sync"]:
+        start = start_floor  # first run: catch up everything since the last upload
+    end = today.isoformat()
+    added = skipped = 0
+    msg = []
+    if start <= end:
+        tx = fetch_transactions(tok, start, end)
+        order_ids = {t.get("orderId") for t in tx if t.get("transactionType") == "SALE"}
+        orders = fetch_orders(tok, (_dt.date.fromisoformat(start) - _dt.timedelta(days=30)).isoformat(), end) if order_ids else []
+        rows = to_rows(tx, orders)
+        with db_factory() as con:
+            # stable keys: "api|<transactionId>|..." so re-syncing the same days never double counts
+            for r in rows:
+                r["_row_key"] = "api:" + ":".join(str(x) for x in r["_key"][1:])
+            for r in rows:
+                cur = con.execute(
+                    """INSERT OR IGNORE INTO transactions(account_id,row_key,date,type,order_no,item_id,title,sku,qty,item_subtotal,postage,gross,net,description,upload_id)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)""",
+                    (account_id, r["_row_key"], r["date"], r["type"], r["order_no"], r["item_id"], r["title"], r["sku"], r["qty"],
+                     r["item_subtotal"], r["postage"], r["gross"], r["net"], r["description"]))
+                added += cur.rowcount
+            skipped = len(rows) - added
+        msg.append(f"{added} new rows ({start} to {end})")
+    if listings:
+        ls = fetch_listings(tok)
+        with db_factory() as con:
+            IM.store_listings(con, account_id, ls)
+            con.execute("UPDATE sync_state SET last_listing_sync=datetime('now') WHERE account_id=?", (account_id,))
+        msg.append(f"{len(ls)} active listings")
+    with db_factory() as con:
+        con.execute("UPDATE sync_state SET last_tx_sync=datetime('now'), last_status='ok', last_message=? WHERE account_id=?",
+                    ("; ".join(msg), account_id))
+    return "; ".join(msg)
+
+
+def sync_all(db_factory, listings=True):
+    with db_factory() as con:
+        ids = [r["account_id"] for r in con.execute("SELECT account_id FROM ebay_tokens")]
+    res = {}
+    for a in ids:
+        try:
+            res[a] = sync_account(db_factory, a, listings=listings)
+        except Exception as e:
+            with db_factory() as con:
+                con.execute("INSERT INTO sync_state(account_id,last_status,last_message) VALUES(?, 'error', ?) "
+                            "ON CONFLICT(account_id) DO UPDATE SET last_status='error', last_message=excluded.last_message, last_tx_sync=datetime('now')",
+                            (a, str(e)[:500]))
+            res[a] = "error: " + str(e)[:200]
+    return res
+
+
+_sync_lock = threading.Lock()
+
+
+def start_scheduler(db_factory, every_minutes=60):
+    def loop():
+        n = 0
+        time.sleep(30)
+        while True:
+            if configured() and _sync_lock.acquire(blocking=False):
+                try:
+                    sync_all(db_factory, listings=(n % 6 == 0))  # listings every 6 hours
+                except Exception:
+                    pass
+                finally:
+                    _sync_lock.release()
+            n += 1
+            time.sleep(every_minutes * 60)
+    threading.Thread(target=loop, daemon=True).start()

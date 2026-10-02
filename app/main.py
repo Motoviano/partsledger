@@ -32,6 +32,13 @@ def startup():
         con.executescript(EB.SCHEMA)
         con.execute("UPDATE ebay_jobs SET status='stopped' WHERE status IN ('queued','running')")
         ensure_admin(con)
+    if os.environ.get("DISABLE_SYNC") != "1":
+        EB.start_scheduler(DB.db)
+
+
+def uk_today():
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo("Europe/London")).date().isoformat()
 
 
 # ------------------------------------------------------------------ auth helpers
@@ -131,7 +138,7 @@ def data(request: Request):
         ups = [dict(r) for r in con.execute(
             "SELECT u.*, a.name AS account FROM uploads u LEFT JOIN accounts a ON a.id=u.account_id ORDER BY u.id DESC LIMIT 200")]
         last = con.execute("SELECT MAX(date) FROM transactions").fetchone()[0]
-    return {"me": u, "asOf": last or date.today().isoformat(), "today": date.today().isoformat(),
+    return {"me": u, "asOf": last or uk_today(), "today": uk_today(),
             "accounts": [{"id": a["id"], "name": a["name"], "channel": a["channel"], "color": a["color"],
                           "hasData": any(i[1] == a["id"] for i in items)} for a in accounts],
             "items": items, "overheads": overheads, "cogs": cogs, "settings": settings, "uploads": ups}
@@ -231,9 +238,18 @@ async def upload(request: Request, files: list[UploadFile] = File(...), account_
                     aid = accs.get((seller or "").lower())
                     if not aid:
                         raise IM.ImportError_(f"This report is for eBay seller '{seller}', which isn't one of the Motoviano accounts.")
+                    sf = con.execute("SELECT synced_from FROM sync_state WHERE account_id=?", (aid,)).fetchone()
+                    synced = 0
+                    if sf and sf["synced_from"]:
+                        # days from this date on come from the live eBay sync; skip them so nothing is counted twice
+                        keep = [r for r in rows if r["date"] < sf["synced_from"]]
+                        synced, rows = len(rows) - len(keep), keep
+                        if not rows:
+                            raise IM.ImportError_(f"Everything in this report is already coming in through the live eBay sync (from {sf['synced_from']}).")
                     uid = con.execute("INSERT INTO uploads(filename,kind,account_id,uploaded_by) VALUES(?,?,?,?)",
                                       (name, "eBay transactions", aid, u["email"])).lastrowid
                     add, skip = IM.store_transactions(con, aid, rows, uid)
+                    skip += synced
                     ds = [r["date"] for r in rows]
                     con.execute("UPDATE uploads SET rows_added=?,rows_skipped=?,date_from=?,date_to=? WHERE id=?", (add, skip, min(ds), max(ds), uid))
                     results.append({"file": name, "ok": True, "msg": f"{names[aid]}: {add} new rows added, {skip} already loaded ({min(ds)} to {max(ds)})."})
@@ -346,8 +362,10 @@ def ebay_status(request: Request):
     with DB.db() as con:
         toks = {r["account_id"]: dict(r) for r in con.execute("SELECT account_id,ebay_user,refresh_expires,connected_at,connected_by FROM ebay_tokens")}
         accs = [dict(r) for r in con.execute("SELECT id,name,seller_id,color FROM accounts WHERE channel='ebay' ORDER BY sort,id")]
+        sync = {r["account_id"]: dict(r) for r in con.execute("SELECT * FROM sync_state")}
     for a in accs:
         a["connection"] = toks.get(a["id"])
+        a["sync"] = sync.get(a["id"])
     return {"configured": EB.configured(), "missing": EB.missing_settings(), "accounts": accs,
             "callbackHint": (os.environ.get("PUBLIC_URL", "").rstrip("/") + "/ebay/callback") if os.environ.get("PUBLIC_URL") else None}
 
@@ -386,6 +404,21 @@ def ebay_callback(request: Request, code: str = "", state: str = "", error: str 
 @app.get("/ebay/declined")
 def ebay_declined():
     return RedirectResponse("/?ebay=declined#ebay", status_code=303)
+
+
+@app.post("/api/ebay/sync")
+def ebay_sync_now(request: Request):
+    need_user(request)
+    import threading
+
+    def run():
+        if EB._sync_lock.acquire(blocking=False):
+            try:
+                EB.sync_all(DB.db, listings=True)
+            finally:
+                EB._sync_lock.release()
+    threading.Thread(target=run, daemon=True).start()
+    return {"ok": True}
 
 
 @app.post("/api/ebay/disconnect/{account_id}")

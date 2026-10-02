@@ -126,3 +126,10 @@ On the **eBay** page, **Upload ad rates** takes a CSV or Excel file with `Accoun
 **Apply to eBay** adds each listing to a General (cost per sale) campaign called "Partsledger General" on that account,
 at its own rate, or updates the rate if the listing is already in that campaign. Listings already in another campaign are reported as failed
 with eBay's reason, so nothing else is changed. Needs the account connected (uses the `sell.marketing` permission).
+
+### Live sync
+
+Once an account is connected, Partsledger pulls its orders, fees, Promoted Listings charges, postage labels and refunds from eBay
+every hour (Finances and Fulfillment APIs), and refreshes its active listings every 6 hours. **Sync now** on the eBay page runs it straight away.
+The sync starts the day after the newest uploaded Transaction report for that account, and later report uploads skip those days,
+so nothing is counted twice. Set `DISABLE_SYNC=1` to switch it off.
