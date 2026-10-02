@@ -152,7 +152,7 @@ def _el(parent, tag, text=None):
     return e
 
 
-def trading(call, token, build=None, root_el=None):
+def trading(call, token, build=None, root_el=None, image=None):
     c = cfg()
     root = root_el if root_el is not None else ET.Element(N + call + "Request")
     if build:
@@ -160,10 +160,18 @@ def trading(call, token, build=None, root_el=None):
     _el(root, "ErrorLanguage", "en_GB")
     _el(root, "WarningLevel", "High")
     body = b'<?xml version="1.0" encoding="utf-8"?>' + ET.tostring(root)
+    ctype = "text/xml"
+    if image is not None:  # UploadSiteHostedPictures with the picture file attached
+        bnd = "PL" + secrets.token_hex(12)
+        body = (f'--{bnd}\r\nContent-Disposition: form-data; name="XML Payload"\r\nContent-Type: text/xml;charset=utf-8\r\n\r\n'.encode()
+                + body + f'\r\n--{bnd}\r\nContent-Disposition: form-data; name="image"; filename="picture.jpg"\r\n'
+                f'Content-Type: application/octet-stream\r\nContent-Transfer-Encoding: binary\r\n\r\n'.encode()
+                + image + f'\r\n--{bnd}--\r\n'.encode())
+        ctype = f"multipart/form-data; boundary={bnd}"
     st, raw = _http(TRADING_URL, body, {
         "X-EBAY-API-CALL-NAME": call, "X-EBAY-API-SITEID": c["EBAY_SITE_ID"],
         "X-EBAY-API-COMPATIBILITY-LEVEL": c["EBAY_COMPAT_LEVEL"], "X-EBAY-API-IAF-TOKEN": token,
-        "Content-Type": "text/xml"}, "POST", timeout=120)
+        "Content-Type": ctype}, "POST", timeout=120)
     try:
         resp = ET.fromstring(raw)
     except ET.ParseError:
@@ -205,18 +213,74 @@ def get_item(token, item_id):
     return trading("GetItem", token, b).find(N + "Item")
 
 
+def _photo_sources(url):
+    """Download addresses for a listing photo, largest first. GetItem gives addresses like
+    .../z/<id>/$_57.JPG?set_id=..., which eBay's picture service can't always re-read itself."""
+    import re
+    out = []
+    m = re.search(r"/(?:z|g)/([A-Za-z0-9~_-]{10,})/", url)
+    if m:
+        out += [f"https://i.ebayimg.com/images/g/{m.group(1)}/s-l1600.jpg", f"https://i.ebayimg.com/images/g/{m.group(1)}/s-l1600.png"]
+    out.append(re.sub(r"/s-l\d+\.(jpg|jpeg|png|webp)", r"/s-l1600.\1", url))
+    out.append(url)
+    return list(dict.fromkeys(out))
+
+
+def _download_jpeg(url):
+    """Fetch a photo and re-save it as a plain JPEG (eBay rejects WebP and some re-encoded files)."""
+    import io
+    from PIL import Image
+    st, raw = _http(url, headers={"User-Agent": "Mozilla/5.0 Partsledger", "Accept": "image/jpeg,image/png;q=0.9,*/*;q=0.5"}, timeout=60)
+    if st != 200 or not raw:
+        return None
+    try:
+        im = Image.open(io.BytesIO(raw))
+        im.load()
+    except Exception:
+        return None
+    if im.mode in ("RGBA", "LA", "P"):
+        im = im.convert("RGBA")
+        bg = Image.new("RGB", im.size, (255, 255, 255))
+        bg.paste(im, mask=im.split()[-1])
+        im = bg
+    elif im.mode != "RGB":
+        im = im.convert("RGB")
+    if min(im.size) < 500:  # eBay wants at least 500px on the longest side; upscale small ones a little
+        k = 500 / max(im.size)
+        if k > 1:
+            im = im.resize((round(im.width * k), round(im.height * k)), Image.LANCZOS)
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=92, optimize=True)
+    return buf.getvalue()
+
+
 def upload_picture(token, url, name):
-    def b(root):
-        _el(root, "ExternalPictureURL", url)
+    """Re-host a photo on the target account. Returns (new_url, note). Tries, in order:
+    download + upload the file, let eBay fetch the address, then reuse the eBay-hosted address as it is."""
+    def b(root, ext=None):
+        if ext:
+            _el(root, "ExternalPictureURL", ext)
         _el(root, "PictureName", name[:80])
         _el(root, "PictureSet", "Supersize")
-    r = trading("UploadSiteHostedPictures", token, b)
-    return r.findtext(f"{N}SiteHostedPictureDetails/{N}FullURL")
-
-
-def _big(url):
-    import re
-    return re.sub(r"/s-l\d+\.(jpg|jpeg|png|webp)", r"/s-l1600.\1", url)
+    last = None
+    for src in _photo_sources(url):
+        data = _download_jpeg(src)
+        if not data:
+            continue
+        try:
+            r = trading("UploadSiteHostedPictures", token, b, image=data)
+            return r.findtext(f"{N}SiteHostedPictureDetails/{N}FullURL"), None
+        except EbayError as e:
+            last = e
+            break  # the file itself was refused; a smaller copy won't help
+    try:
+        r = trading("UploadSiteHostedPictures", token, lambda root: b(root, url))
+        return r.findtext(f"{N}SiteHostedPictureDetails/{N}FullURL"), None
+    except EbayError as e:
+        last = e
+    if "ebayimg.com" in url:
+        return url, f"photo kept on its original eBay address ({last})"
+    raise last or EbayError("Couldn't copy a photo.")
 
 
 # Elements copied as they are from the source listing
@@ -283,10 +347,16 @@ def copy_one(src_token, dst_token, item_id, price_rule, policies, verify_only):
     qty = int(src.findtext(N + "Quantity") or 1) - int(src.findtext(f"{N}SellingStatus/{N}QuantitySold") or 0)
     price = apply_price(cur, price_rule)
     urls = [u.text for u in src.findall(f"{N}PictureDetails/{N}PictureURL") if u.text]
+    notes = []
     if verify_only:
         pics = urls[:1]  # checking doesn't need every photo re-hosted
     else:
-        pics = [upload_picture(dst_token, _big(u), f"{sku or item_id}-{i+1}") for i, u in enumerate(urls[:24])]
+        pics = []
+        for i, u in enumerate(urls[:24]):
+            p, note = upload_picture(dst_token, u, f"{sku or item_id}-{i+1}")
+            pics.append(p)
+            if note:
+                notes.append(f"Photo {i+1}: {note}")
     new = build_new_item(src, pics, price, qty, policies, sku)
     call = "VerifyAddFixedPriceItem" if verify_only else "AddFixedPriceItem"
     root = ET.Element(N + call + "Request")
@@ -294,7 +364,7 @@ def copy_one(src_token, dst_token, item_id, price_rule, policies, verify_only):
     r = trading(call, dst_token, root_el=root)
     comp_n = len(src.findall(f"{N}ItemCompatibilityList/{N}Compatibility"))
     return {"new_item_id": r.findtext(N + "ItemID"), "sku": sku, "title": title, "price": price, "photos": len(urls),
-            "fitment_rows": comp_n, "warnings": json.loads(r.get("pl_warnings", "[]"))}
+            "fitment_rows": comp_n, "warnings": notes + json.loads(r.get("pl_warnings", "[]"))}
 
 
 def apply_price(cur, rule):
