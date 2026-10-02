@@ -17,6 +17,7 @@ from . import profit as PR
 from . import ebay as EB
 from . import edits as ED
 from . import stock as ST
+from . import messages as MS
 from .auth import check_pw, ensure_admin, hash_pw
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -35,12 +36,14 @@ def startup():
         EB.migrate(con)
         con.executescript(ED.SCHEMA)
         con.executescript(ST.SCHEMA)
+        con.executescript(MS.SCHEMA)
         con.execute("UPDATE edit_jobs SET status='stopped' WHERE status IN ('queued','running')")
         con.execute("UPDATE ebay_jobs SET status='stopped' WHERE status IN ('queued','running')")
         ensure_admin(con)
     if os.environ.get("DISABLE_SYNC") != "1":
         EB.start_scheduler(DB.db)
         ST.start_scheduler(DB.db)
+        MS.start_scheduler(DB.db)
 
 
 def uk_today():
@@ -145,10 +148,11 @@ def data(request: Request):
         ups = [dict(r) for r in con.execute(
             "SELECT u.*, a.name AS account FROM uploads u LEFT JOIN accounts a ON a.id=u.account_id ORDER BY u.id DESC LIMIT 200")]
         last = con.execute("SELECT MAX(date) FROM transactions").fetchone()[0]
+        msg_open = con.execute("SELECT COUNT(*) FROM messages WHERE status!='Answered' AND done=0").fetchone()[0]
     return {"me": u, "asOf": last or uk_today(), "today": uk_today(),
             "accounts": [{"id": a["id"], "name": a["name"], "channel": a["channel"], "color": a["color"],
                           "hasData": any(i[1] == a["id"] for i in items)} for a in accounts],
-            "items": items, "overheads": overheads, "cogs": cogs, "settings": settings, "uploads": ups}
+            "items": items, "overheads": overheads, "cogs": cogs, "settings": settings, "uploads": ups, "msgOpen": msg_open}
 
 
 @app.post("/api/cogs")
@@ -544,6 +548,67 @@ def stock_push(request: Request):
     import threading
     threading.Thread(target=ST.cycle, args=(DB.db,), kwargs={"force_push": True}, daemon=True).start()
     return {"ok": True}
+
+
+# ------------------------------------------------------------------ buyer messages
+@app.get("/api/messages")
+def messages(request: Request, days: int = 60):
+    need_user(request)
+    with DB.db() as con:
+        rows = [dict(r) for r in con.execute("SELECT * FROM messages WHERE created>=datetime('now', ?) ORDER BY created",
+                                             (f"-{max(1, min(days, 400))} days",))]
+        items = {r["item_id"] for r in rows if r["item_id"]}
+        info = {}
+        sku_map = {r["item_id"]: r["sku"] for r in con.execute("SELECT item_id,sku FROM sku_map")}
+        for r in con.execute("SELECT account_id,item_id,sku,price,qty FROM listings"):
+            if r["item_id"] in items:
+                info[r["item_id"]] = {"sku": sku_map.get(r["item_id"]) or r["sku"], "price": r["price"], "qty": r["qty"]}
+        sold = {r[0]: r[1] for r in con.execute(
+            f"SELECT item_id, SUM(qty) FROM transactions WHERE type='Order' AND item_id IN ({','.join('?' * len(items)) or 'NULL'}) GROUP BY item_id", list(items))}
+        state = [dict(r) for r in con.execute("""SELECT a.id,a.name,a.color,s.last_check,s.last_status,s.last_message FROM accounts a
+            JOIN ebay_tokens t ON t.account_id=a.id LEFT JOIN message_state s ON s.account_id=a.id ORDER BY a.sort,a.id""")]
+        tpl = MS.get_templates(con)
+    for r in rows:
+        r["responses"] = json.loads(r["responses"] or "[]")
+        r.pop("fetched_at", None)
+    return {"messages": rows, "items": {k: {**v, "sold": sold.get(k, 0)} for k, v in info.items()},
+            "accounts": state, "templates": tpl}
+
+
+@app.post("/api/messages/reply")
+async def messages_reply(request: Request):
+    u = need_user(request)
+    b = await request.json()
+    with DB.db() as con:
+        MS.reply(con, int(b["account_id"]), str(b["message_id"]), b.get("text"), bool(b.get("public")), u["email"])
+    return {"ok": True}
+
+
+@app.post("/api/messages/done")
+async def messages_done(request: Request):
+    need_user(request)
+    b = await request.json()
+    ids = [str(x) for x in b.get("message_ids") or []]
+    with DB.db() as con:
+        for mid in ids:
+            con.execute("UPDATE messages SET done=? WHERE account_id=? AND message_id=?", (1 if b.get("done", True) else 0, int(b["account_id"]), mid))
+    return {"ok": True}
+
+
+@app.post("/api/messages/check")
+def messages_check(request: Request):
+    need_user(request)
+    import threading
+    threading.Thread(target=MS.check, args=(DB.db,), daemon=True).start()
+    return {"ok": True}
+
+
+@app.post("/api/messages/templates")
+async def messages_templates(request: Request):
+    need_user(request)
+    b = await request.json()
+    with DB.db() as con:
+        return MS.set_templates(con, b.get("items") or [])
 
 
 @app.get("/ebay/connect/{account_id}")

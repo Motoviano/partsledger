@@ -16,6 +16,7 @@
     <nav id="nav">
       <button data-page="dash"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="8" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="15" width="7" height="6" rx="1"/></svg><span>Dashboard</span></button>
       <button data-page="orders"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Sold items</span></button>
+      <button data-page="msgs"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4z"/></svg><span>Messages</span><em class="badge" id="msgBadge" hidden></em></button>
       <button data-page="traffic"><svg viewBox="0 0 24 24"><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span>Traffic</span></button>
       <button data-page="edit"><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg><span>Bulk edit</span></button>
       <button data-page="stock"><svg viewBox="0 0 24 24"><path d="M3 8l9-5 9 5v8l-9 5-9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg><span>Stock sync</span></button>
@@ -69,6 +70,25 @@
           <div style="display:flex;gap:8px;flex-wrap:wrap"><input type="search" id="ordSearch" placeholder="Search order, SKU or product" aria-label="Search sold items"><button class="btn" type="button" id="ordCsv">Export CSV</button></div></div>
         <div class="tbl-wrap"><table id="ordTable"></table></div>
         <div class="more"><button class="btn" id="ordMore" type="button">Show more</button></div>
+      </div>
+    </section>
+
+    <section id="p-msgs" data-p hidden>
+      <div class="panel">
+        <div class="panel-head"><div><h2>Buyer messages</h2><p id="msStatus"></p></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <select id="msShow" aria-label="Show"><option value="open">Needs a reply</option><option value="all">All</option><option value="answered">Answered</option><option value="done">Marked done</option></select>
+            <input type="search" id="msSearch" placeholder="Search buyer, item or text" aria-label="Search messages">
+            <button class="btn" type="button" id="msCheck">Check now</button></div></div>
+        <div class="inbox">
+          <div class="threads" id="msList" role="list"></div>
+          <div class="convo" id="msConvo"><p class="empty">Choose a conversation.</p></div>
+        </div>
+      </div>
+      <div class="panel" style="margin-top:14px">
+        <div class="panel-head"><div><h2>Quick replies</h2><p>Click one under a conversation to put it in the reply box. {buyer} and {title} are filled in for you.</p></div>
+          <div style="display:flex;gap:8px"><button class="btn" type="button" id="tplAdd">Add one</button><button class="btn primary" type="button" id="tplSave">Save quick replies</button></div></div>
+        <div id="tplList" class="tpl-list"></div>
       </div>
     </section>
 

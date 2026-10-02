@@ -814,6 +814,109 @@ $('stPushBtn').onclick = async () => {
   try { await api('/api/stock/push', { method: 'POST' }); toast('Updating quantities on eBay…'); setTimeout(renderStock, 4000); } catch (e) { toast(e.message); }
 };
 
+// ---------------------------------------------------------------- buyer messages
+let MSG = null, msSel = null, msDrafts = new Map();
+const ukTime = s => s ? new Date(s + 'Z').toLocaleString('en-GB', { timeZone: 'Europe/London', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+function ago(s) {
+  const m = (Date.now() - new Date(s + 'Z')) / 6e4;
+  return m < 60 ? `${Math.max(1, Math.round(m))} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
+}
+function msThreads() {
+  const th = new Map();
+  MSG.messages.forEach(m => {
+    const k = `${m.account_id}|${m.sender}|${m.item_id || ''}`;
+    const t = th.get(k) || { k, a: m.account_id, sender: m.sender, item: m.item_id, title: m.item_title, msgs: [] };
+    t.msgs.push(m); th.set(k, t);
+  });
+  return [...th.values()].map(t => {
+    t.msgs.sort((x, y) => x.created.localeCompare(y.created));
+    t.last = t.msgs[t.msgs.length - 1];
+    t.openMsgs = t.msgs.filter(m => m.status !== 'Answered' && !m.done);
+    t.open = t.openMsgs.length > 0; t.done = !t.open && t.msgs.some(m => m.done && m.status !== 'Answered');
+    return t;
+  });
+}
+async function renderMsgs(keepSel) {
+  try { MSG = await api('/api/messages'); } catch (e) { toast(e.message); return; }
+  const errs = MSG.accounts.filter(a => a.last_status === 'error');
+  const checked = MSG.accounts.map(a => a.last_check).filter(Boolean).sort().pop();
+  $('msStatus').innerHTML = MSG.accounts.length ? (checked ? `Checked ${ago(checked)} (every 10 minutes) for ${MSG.accounts.map(a => esc(a.name)).join(', ')}.` : 'First check runs within a few minutes.') +
+    (errs.length ? ` <span class="neg">${errs.map(a => `${esc(a.name)}: ${esc(a.last_message)}`).join(' · ')}</span>` : '') : 'Connect your eBay accounts on the eBay page first.';
+  drawThreads(); drawTemplates();
+  if (keepSel && msSel) drawConvo();
+}
+function drawThreads() {
+  const f = F(), show = $('msShow').value, q = $('msSearch').value.trim().toLowerCase();
+  const all = msThreads().filter(t => f.a.has(AIDX[t.a]));
+  const n = all.filter(t => t.open).length; $('msgBadge').textContent = n; $('msgBadge').hidden = !n; D.msgOpen = n;
+  const rows = all.filter(t => (show === 'all' || (show === 'open' && t.open) || (show === 'answered' && !t.open && !t.done) || (show === 'done' && t.done)) &&
+    (!q || t.sender.toLowerCase().includes(q) || (t.title || '').toLowerCase().includes(q) || t.msgs.some(m => (m.body || '').toLowerCase().includes(q) || (m.subject || '').toLowerCase().includes(q))))
+    .sort((x, y) => (y.open - x.open) || y.last.created.localeCompare(x.last.created));
+  $('msList').innerHTML = rows.length ? rows.map(t => `<button type="button" role="listitem" class="thread ${t.open ? 'open' : ''}" data-k="${esc(t.k)}" aria-current="${msSel === t.k}">
+      <span class="top"><span><span class="dot" style="background:${accColor(t.a)}"></span>${esc(accName(t.a))}</span><span>${ago(t.last.created)}</span></span>
+      <b>${esc(t.sender)}</b><span class="it">${esc(t.title || 'General question')}</span><span class="sn">${esc((t.last.body || t.last.subject || '').slice(0, 120))}</span></button>`).join('')
+    : `<p class="empty">${show === 'open' ? 'No questions waiting for a reply.' : 'No messages match.'}</p>`;
+  $('msList').querySelectorAll('.thread').forEach(b => b.onclick = () => { msSel = b.dataset.k; $('msList').querySelectorAll('.thread').forEach(x => x.setAttribute('aria-current', x === b)); drawConvo(); });
+  if (!msSel && rows.length && matchMedia('(min-width:861px)').matches) { msSel = rows[0].k; $('msList').querySelector('.thread').setAttribute('aria-current', 'true'); drawConvo(); }
+  if (msSel && !rows.some(t => t.k === msSel) && !all.some(t => t.k === msSel)) { msSel = null; $('msConvo').innerHTML = '<p class="empty">Choose a conversation.</p>'; }
+}
+function drawConvo() {
+  const t = msThreads().find(x => x.k === msSel); if (!t) return;
+  const it = MSG.items[t.item] || null;
+  const bubbles = [];
+  t.msgs.forEach(m => {
+    bubbles.push(`<div class="bubble buyer"><small>${esc(t.sender)} · ${ukTime(m.created)}${m.subject && !/^(question|re:)/i.test(m.subject) ? ' · ' + esc(m.subject) : ''}</small>${esc(m.body || '')}</div>`);
+    const rs = m.responses && m.responses.length ? m.responses : m.reply_text ? [m.reply_text] : [];
+    rs.forEach(r => bubbles.push(`<div class="bubble me"><small>You${m.replied_by ? ' (' + esc(m.replied_by) + ')' : ''}${m.replied_at ? ' · ' + ukTime(m.replied_at) : ''}</small>${esc(r)}</div>`));
+    if (!rs.length && m.status === 'Answered') bubbles.push('<div class="bubble me"><small>You</small><span class="muted">Answered on eBay</span></div>');
+  });
+  const target = t.openMsgs[t.openMsgs.length - 1] || t.last;
+  const draft = msDrafts.get(t.k) || '';
+  $('msConvo').innerHTML = `<div class="head"><h3>${t.item ? `<a href="https://www.ebay.co.uk/itm/${esc(t.item)}" target="_blank" rel="noopener">${esc(t.title || t.item)}</a>` : 'General question'}</h3>
+      <div class="meta"><span><span class="dot" style="background:${accColor(t.a)}"></span>${esc(accName(t.a))}</span><span>Buyer: <b>${esc(t.sender)}</b></span>
+      ${it ? `<span>SKU <span class="sku">${esc(it.sku || '–')}</span></span><span>${gbp(it.price)}</span><span>Stock ${it.qty ?? '–'}</span><span>Sold ${n0(it.sold)}</span>` : ''}
+      ${t.open ? '<span class="chip ret">Needs a reply</span>' : t.done ? '<span class="chip b">Marked done</span>' : '<span class="chip k">Answered</span>'}</div></div>
+    <div class="msgs" id="msMsgs">${bubbles.join('')}</div>
+    <div class="reply">
+      <div class="tpls">${MSG.templates.map((p, i) => `<button type="button" class="tplbtn" data-tpl="${i}">${esc(p.name)}</button>`).join('')}</div>
+      <label for="msText" class="muted" style="font-size:12px">Reply to ${esc(t.sender)} — sent through eBay (no links, phone numbers or email addresses)</label>
+      <textarea id="msText" maxlength="2000">${esc(draft)}</textarea>
+      <div class="row"><span class="muted" id="msLen">${draft.length}/2000</span>
+        <label class="chk" style="padding:0"><input type="checkbox" id="msPublic"> Also show on the listing's public questions</label>
+        <span style="flex:1"></span>
+        ${t.open ? '<button class="btn" type="button" id="msDone">Mark done, no reply</button>' : t.done ? '<button class="btn" type="button" id="msUndone">Move back to needs a reply</button>' : ''}
+        <button class="btn primary" type="button" id="msSend">Send reply</button></div>
+    </div>`;
+  const box = $('msMsgs'); box.scrollTop = box.scrollHeight;
+  const ta = $('msText');
+  ta.oninput = () => { msDrafts.set(t.k, ta.value); $('msLen').textContent = `${ta.value.length}/2000`; };
+  $('msConvo').querySelectorAll('[data-tpl]').forEach(b => b.onclick = () => {
+    const p = MSG.templates[+b.dataset.tpl]; const txt = p.text.replaceAll('{buyer}', t.sender).replaceAll('{title}', t.title || 'this part');
+    ta.value = ta.value.trim() ? ta.value.trim() + '\n\n' + txt : txt; ta.oninput(); ta.focus();
+  });
+  $('msSend').onclick = async () => {
+    const b = $('msSend'); if (!ta.value.trim()) return toast('Type a reply first.');
+    if (/https?:\/\/|www\.|@[a-z0-9-]+\.[a-z]|\b0\d{9,10}\b/i.test(ta.value) && b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = 'eBay may block links, emails or phone numbers. Send anyway?'; return; }
+    b.disabled = true; b.textContent = 'Sending…';
+    try { await post('/api/messages/reply', { account_id: t.a, message_id: target.message_id, text: ta.value, public: $('msPublic').checked }); msDrafts.delete(t.k); toast('Reply sent'); await renderMsgs(true); }
+    catch (e) { toast(e.message); b.disabled = false; b.textContent = 'Send reply'; b.dataset.sure = ''; }
+  };
+  const done = $('msDone'); if (done) done.onclick = async () => { await post('/api/messages/done', { account_id: t.a, message_ids: t.openMsgs.map(m => m.message_id), done: true }); toast('Marked done'); renderMsgs(true); };
+  const und = $('msUndone'); if (und) und.onclick = async () => { await post('/api/messages/done', { account_id: t.a, message_ids: t.msgs.map(m => m.message_id), done: false }); renderMsgs(true); };
+}
+function drawTemplates() {
+  $('tplList').innerHTML = MSG.templates.map((p, i) => `<div class="tpl"><input type="text" value="${esc(p.name)}" data-i="${i}" data-f="name" aria-label="Quick reply name" maxlength="40">
+    <textarea data-i="${i}" data-f="text" aria-label="Quick reply text" maxlength="2000">${esc(p.text)}</textarea><button class="link danger" type="button" data-del="${i}">Remove</button></div>`).join('') || '<p class="empty">No quick replies yet.</p>';
+  $('tplList').querySelectorAll('[data-f]').forEach(el => el.oninput = () => { MSG.templates[+el.dataset.i][el.dataset.f] = el.value; });
+  $('tplList').querySelectorAll('[data-del]').forEach(b => b.onclick = () => { MSG.templates.splice(+b.dataset.del, 1); drawTemplates(); });
+}
+$('tplAdd').onclick = () => { MSG.templates.push({ name: 'New reply', text: 'Hi {buyer}, ' }); drawTemplates(); };
+$('tplSave').onclick = async () => { try { MSG.templates = await post('/api/messages/templates', { items: MSG.templates }); toast('Quick replies saved'); drawTemplates(); if (msSel) drawConvo(); } catch (e) { toast(e.message); } };
+$('msShow').addEventListener('change', drawThreads);
+$('msSearch').addEventListener('input', drawThreads);
+$('msCheck').onclick = async () => { try { await api('/api/messages/check', { method: 'POST' }); toast('Checking eBay for new messages…'); setTimeout(() => renderMsgs(true), 8000); } catch (e) { toast(e.message); } };
+setInterval(() => { if (page === 'msgs' && MSG && !document.hidden && !($('msText') && document.activeElement === $('msText'))) renderMsgs(true); }, 120000);
+
 // ---------------------------------------------------------------- eBay
 let EBS = null, cpRows = [], jobTimer = null;
 async function renderEbay() {
@@ -926,7 +1029,7 @@ $('adFile').onchange = async e => {
 };
 
 // ---------------------------------------------------------------- wiring
-const titles = { dash: 'Dashboard', orders: 'Sold items', traffic: 'Traffic', edit: 'Bulk edit', stock: 'Stock sync', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
+const titles = { dash: 'Dashboard', orders: 'Sold items', traffic: 'Traffic', edit: 'Bulk edit', stock: 'Stock sync', msgs: 'Messages', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
 let page = 'dash';
 function show(p) {
   page = p; document.querySelectorAll('[data-p]').forEach(s => s.hidden = s.id !== 'p-' + p);
@@ -944,6 +1047,7 @@ function renderAll() {
   if (page === 'traffic') renderTraffic();
   if (page === 'edit') renderEdit();
   if (page === 'stock') renderStock();
+  if (page === 'msgs') renderMsgs(true);
   if (page === 'cogs') { renderBands(); renderCogs(); }
   if (page === 'charts') renderCharts();
   if (page === 'uploads') renderUploads();
@@ -970,6 +1074,7 @@ async function load() {
   selGrp = buildMS('grpMenu', 'msGrp', groups.map(g => ({ v: g, html: `<span class="sku">${esc(g)}</span>`, note: gUnits[g] ? n0(gUnits[g]) + ' sold' : '' })), 'All product groups', 'groups');
   $('upAcc').innerHTML = '<option value="">Work it out from the file</option>' + ACC.filter(a => a.channel === 'ebay').map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
   $('whoami').textContent = `${ME.name} (${ME.email})`;
+  $('msgBadge').textContent = D.msgOpen || ''; $('msgBadge').hidden = !D.msgOpen;
   $('sideFoot').innerHTML = `<strong>Motoviano Ltd</strong>${ACC.map(a => esc(a.name) + (a.hasData ? '' : ' (no data yet)')).join('<br>')}<br>${I.length ? 'Data up to ' + nice(D.asOf) : 'No data yet'}`;
   if (!$('cFrom').value) $('cFrom').value = TODAY;
   if (!$('fFrom').value) { $('fFrom').value = D.minDate; $('fTo').value = D.asOf; }
