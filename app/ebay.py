@@ -302,9 +302,23 @@ def build_new_item(src, pictures, price, quantity, policies, sku):
             _el(e, "CategoryID", cid)
         if tag == "ProductListingDetails":
             for ch in list(e):
-                if ch.tag.replace(N, "") not in PLD_KEEP:
+                t = ch.tag.replace(N, "")
+                if t not in PLD_KEEP:
                     e.remove(ch)
-            if not len(e):
+                elif t == "BrandMPN":
+                    # GetItem often returns BrandMPN with only one of Brand/MPN (or empty ones), which
+                    # AddFixedPriceItem rejects (code 37). Keep it only when both are filled; the brand
+                    # and part number are still copied in the item specifics.
+                    b, m = (ch.findtext(N + "Brand") or "").strip(), (ch.findtext(N + "MPN") or "").strip()
+                    if not b or not m:
+                        e.remove(ch)
+                    else:
+                        for x in list(ch):
+                            if x.tag.replace(N, "") not in ("Brand", "MPN"):
+                                ch.remove(x)
+                elif t in ("EAN", "UPC", "ISBN") and not (ch.text or "").strip():
+                    e.remove(ch)
+            if not any(c.tag.replace(N, "") in ("EAN", "UPC", "ISBN", "BrandMPN") for c in e):
                 continue
         item.append(e)
     comp = src.find(N + "ItemCompatibilityList")
