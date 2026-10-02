@@ -475,7 +475,7 @@ function edShowOpts() {
   const th = $('edTitleHow').value; $('edFindWrap').hidden = th !== 'replace'; $('edReplL').textContent = th === 'replace' ? 'Replace with' : 'Text to add';
   $('edHelp').textContent = {
     price: how === 'profit' ? 'Works out the lowest price that leaves this profit after COGS, postage (your average label cost for the SKU), eBay fees (each account\'s own rate over the last 90 days) and ads.' : 'Changes the Buy It Now price.',
-    qty: 'Sets the quantity available. 0 keeps the listing but shows it as out of stock (if out-of-stock control is on in eBay).',
+    qty: 'Sets the quantity available. 0 keeps the listing but shows it as out of stock (if out-of-stock control is on in eBay). For SKUs in Stock sync, change the stock number on the Stock sync page instead, or the sync will put it back.',
     title: 'eBay titles can be up to 80 characters. Listings that would go over are left out.',
     specific: 'Adds or changes one item specific. The listing\'s other specifics stay as they are. Several values: separate them with |.',
   }[fld];
@@ -713,6 +713,107 @@ async function showEditJob(id) {
   if (run) edJobTimer = setTimeout(() => showEditJob(id), 2500); else renderEditJobs();
 }
 
+// ---------------------------------------------------------------- stock sync
+let STK = null, stTyped = new Map();  // sku -> {on_hand?, enabled?}
+const stState = { sort: null, limit: 150, render: () => drawStock(), empty: 'No SKUs match.' };
+const accName = id => (ACC[AIDX[id]] || {}).name || '#' + id, accColor = id => (ACC[AIDX[id]] || {}).color || '#888';
+async function renderStock() {
+  try { STK = await api('/api/stock'); } catch (e) { toast(e.message); return; }
+  const s = STK.settings;
+  $('stAuto').textContent = s.stock_auto ? 'Automatic sync: ON (click to turn off)' : 'Automatic sync: OFF (click to turn on)';
+  $('stAuto').classList.toggle('on', !!s.stock_auto); $('stAuto').classList.toggle('primary', !s.stock_auto);
+  if (document.activeElement !== $('stCap')) $('stCap').value = s.stock_cap || 0;
+  $('stCapNote').textContent = s.stock_cap ? `Listings show at most ${s.stock_cap}, even when you have more.` : 'Listings show your full stock.';
+  $('stAcc').innerHTML = `<thead><tr><th class="l">Account</th><th class="l">eBay out-of-stock control</th><th class="l">Last order check</th></tr></thead><tbody>${STK.accounts.map(a => `<tr>
+    <td class="l"><span class="dot" style="background:${a.color}"></span>${esc(a.name)}</td>
+    <td class="l">${a.oos_control === 1 ? '<span class="chip k">On</span> <span class="muted">sold-out listings stay live at 0</span>' : a.oos_control === 0 ? '<span class="chip m">Off</span> <span class="muted">listings won\'t be set to 0 (eBay would end them). Turn it on in Seller Hub → Account → Site preferences.</span>' : '<span class="muted">checked at the next order check</span>'}</td>
+    <td class="l prod">${a.last_check ? esc(a.last_check.replace('T', ' ').slice(0, 16)) + ' UTC · ' : ''}${a.last_status === 'error' ? '<span class="chip m">Error</span> ' : ''}${esc(a.last_message || (a.last_check ? '' : 'Starts once a stock number is set'))}</td></tr>`).join('')}</tbody>`;
+  const pl = STK.plan, ready = pl.filter(p => !p[5]);
+  $('stPending').innerHTML = pl.length ? `<b>${n0(ready.length)} listings</b> on eBay don't match the stock numbers${pl.length > ready.length ? ` (${pl.length - ready.length} held back, see list)` : ''}.${s.stock_auto ? ' They update at the next check (within 10 minutes).' : ''}` : 'Every synced listing on eBay matches its stock number.';
+  $('stPushBtn').hidden = !ready.length; $('stShowPlan').hidden = !pl.length;
+  $('stPlan').innerHTML = `<thead><tr><th class="l">Account</th><th class="l">SKU</th><th class="l">Item</th><th>eBay now</th><th>Will be</th><th class="l"></th></tr></thead><tbody>${pl.map(p => `<tr>
+    <td class="l"><span class="dot" style="background:${accColor(p[0])}"></span>${esc(accName(p[0]))}</td><td class="l"><span class="sku">${esc(p[2])}</span></td>
+    <td class="l"><a href="https://www.ebay.co.uk/itm/${esc(p[1])}" target="_blank" rel="noopener">${esc(p[1])}</a></td><td>${p[3] ?? '–'}</td><td><b>${p[4]}</b></td><td class="l prod">${p[5] ? `<span class="neg">${esc(p[5])}</span>` : ''}</td></tr>`).join('')}</tbody>`;
+  drawStock(); drawStockLogs();
+}
+function stRows() {
+  const f = F(), q = $('stSearch').value.trim().toLowerCase(), show = $('stShow').value, cap = STK.settings.stock_cap;
+  return STK.skus.map(r => {
+    const ty = stTyped.get(r.sku) || {}, oh = 'on_hand' in ty ? ty.on_hand : r.on_hand, en = 'enabled' in ty ? ty.enabled : !!r.enabled;
+    const tgt = oh == null ? null : (cap ? Math.min(oh, cap) : oh);
+    const diff = en && tgt != null && r.listings.some(l => l[2] !== tgt);
+    const accs = new Set(r.listings.map(l => l[0]));
+    return { ...r, oh, en, tgt, diff, nacc: accs.size, typed: Object.keys(ty).length > 0 };
+  }).filter(r => (f.allG || f.g.has(r.group)) && (!q || r.sku.toLowerCase().includes(q) || r.title.toLowerCase().includes(q)) &&
+    (show === 'all' || (show === 'multi' && r.nacc >= 2) || (show === 'unset' && r.oh == null) || (show === 'synced' && r.en && r.oh != null) || (show === 'off' && !r.en) || (show === 'diff' && r.diff)));
+}
+function drawStock() {
+  if (!STK) return;
+  const rows = stRows();
+  const synced = STK.skus.filter(r => r.enabled && r.on_hand != null).length;
+  $('stSub').textContent = `${n0(rows.length)} SKUs shown · ${n0(synced)} synced. A SKU is only synced once it has a stock number. Sales before you set the number don't count.`;
+  const cols = [
+    { h: 'SKU', l: 1, cl: 'prod', v: r => r.sku, f: r => `<span class="t">${esc(r.title || r.sku)}</span><span class="s">${esc(r.sku)}</span>` },
+    { h: 'On eBay now', l: 1, v: r => r.listings.length, f: r => `<div class="qchips">${r.listings.map(l => `<a class="qchip ${r.en && r.tgt != null && l[2] !== r.tgt ? 'off' : ''}" href="https://www.ebay.co.uk/itm/${esc(l[1])}" target="_blank" rel="noopener" title="${esc(accName(l[0]))} · ${esc(l[1])}"><span class="dot" style="background:${accColor(l[0])}"></span>${l[2] ?? '–'}</a>`).join('') || '<span class="muted">not listed</span>'}</div>` },
+    { h: 'Stock on hand', v: r => r.oh ?? -1, f: r => `<input type="number" class="cell-in ${'on_hand' in (stTyped.get(r.sku) || {}) ? 'changed' : ''}" data-sku="${esc(r.sku)}" min="0" step="1" value="${r.oh ?? ''}" placeholder="not set" aria-label="Stock for ${esc(r.sku)}">` },
+    { h: 'Sync', v: r => r.en ? 1 : 0, f: r => `<input type="checkbox" class="st-en" data-sku="${esc(r.sku)}" ${r.en ? 'checked' : ''} aria-label="Sync ${esc(r.sku)}">` },
+    { h: 'Status', l: 1, v: r => r.oh == null ? 2 : !r.en ? 3 : r.diff ? 0 : 1, f: r => r.oh == null ? '<span class="muted">No stock number</span>' : !r.en ? '<span class="muted">Not synced</span>' : r.diff ? `<span class="chip ret">eBay will change to ${r.tgt}</span>` : '<span class="chip k">In sync</span>' }];
+  table($('stTable'), cols, rows, null, stState);
+  $('stMore').hidden = rows.length <= stState.limit;
+  $('stTable').querySelectorAll('.cell-in').forEach(inp => inp.addEventListener('input', () => {
+    const sku = inp.dataset.sku, base = STK.skus.find(x => x.sku === sku), ty = stTyped.get(sku) || {};
+    const v = inp.value === '' ? null : Math.max(0, Math.round(+inp.value));
+    if (v === base.on_hand) delete ty.on_hand; else ty.on_hand = v;
+    stTyped.set(sku, ty); inp.classList.toggle('changed', 'on_hand' in ty); stDirty();
+  }));
+  $('stTable').querySelectorAll('.st-en').forEach(b => b.onchange = () => {
+    const sku = b.dataset.sku, base = STK.skus.find(x => x.sku === sku), ty = stTyped.get(sku) || {};
+    if (b.checked === !!base.enabled) delete ty.enabled; else ty.enabled = b.checked;
+    stTyped.set(sku, ty); stDirty();
+  });
+  stDirty();
+}
+function stDirty() { const n = [...stTyped.values()].filter(v => Object.keys(v).length).length; $('stSave').disabled = !n; $('stDirty').textContent = n ? `${n} unsaved` : ''; }
+function drawStockLogs() {
+  $('stLog').innerHTML = STK.log.length ? `<thead><tr><th class="l">When (UTC)</th><th class="l">SKU</th><th>Change</th><th>Stock</th><th class="l">Why</th></tr></thead><tbody>${STK.log.map(l => `<tr>
+    <td class="l">${esc((l.at || '').replace('T', ' ').slice(0, 16))}</td><td class="l"><span class="sku">${esc(l.sku)}</span></td><td>${l.change == null ? '–' : (l.change > 0 ? '+' : '') + l.change}</td><td>${l.on_hand ?? '–'}</td>
+    <td class="l prod">${esc(l.reason)}${l.account ? ' on ' + esc(l.account) : ''}${l.by ? ` <span class="sub">${esc(l.by)}</span>` : ''}</td></tr>`).join('')}</tbody>` : '<tbody><tr><td class="empty">Nothing yet.</td></tr></tbody>';
+  $('stPushes').innerHTML = STK.pushes.length ? `<thead><tr><th class="l">When (UTC)</th><th class="l">Account</th><th class="l">SKU</th><th>Qty</th><th class="l">Result</th></tr></thead><tbody>${STK.pushes.map(p => `<tr>
+    <td class="l">${esc((p.at || '').slice(0, 16))}</td><td class="l">${esc(p.account || '')}</td><td class="l"><span class="sku">${esc(p.sku)}</span></td><td>${p.old_qty ?? '–'} → <b>${p.new_qty}</b></td>
+    <td class="l prod">${p.status === 'ok' ? '<span class="chip k">Done</span>' : '<span class="chip m">Failed</span> ' + esc(p.message)}</td></tr>`).join('')}</tbody>` : '<tbody><tr><td class="empty">Nothing sent yet.</td></tr></tbody>';
+}
+$('stSearch').addEventListener('input', () => { stState.limit = 150; drawStock(); });
+$('stShow').addEventListener('change', () => { stState.limit = 150; drawStock(); });
+$('stMore').onclick = () => { stState.limit += 300; drawStock(); };
+function stFill(pick) {
+  let n = 0;
+  stRows().forEach(r => { if (r.oh != null) return; const q = r.listings.map(l => l[2]).filter(v => v != null); if (!q.length) return;
+    const ty = stTyped.get(r.sku) || {}; ty.on_hand = pick(q); stTyped.set(r.sku, ty); n++; });
+  toast(n ? `Filled ${n} SKUs. Check them, then Save stock.` : 'Every SKU shown already has a stock number.'); drawStock();
+}
+$('stFillMin').onclick = () => stFill(q => Math.min(...q));
+$('stFillMax').onclick = () => stFill(q => Math.max(...q));
+function stToggleShown(on) { stRows().forEach(r => { const base = STK.skus.find(x => x.sku === r.sku), ty = stTyped.get(r.sku) || {}; if (on === !!base.enabled) delete ty.enabled; else ty.enabled = on; stTyped.set(r.sku, ty); }); drawStock(); }
+$('stOff').onclick = () => stToggleShown(false);
+$('stOn').onclick = () => stToggleShown(true);
+$('stSave').onclick = async () => {
+  const items = [...stTyped.entries()].filter(([, v]) => Object.keys(v).length).map(([sku, v]) => ({ sku, ...v }));
+  try { const r = await post('/api/stock/set', { items }); stTyped = new Map(); toast(`Saved ${r.saved} SKUs` + (STK.settings.stock_auto ? '. eBay updates within 10 minutes.' : '. Automatic sync is off, so nothing is sent to eBay yet.')); renderStock(); } catch (e) { toast(e.message); }
+};
+$('stAuto').onclick = async () => {
+  const b = $('stAuto'), on = !STK.settings.stock_auto;
+  if (on && b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = `Click again: update ${n0(STK.plan.filter(p => !p[5]).length)} listings now and keep them in step`; setTimeout(() => { b.dataset.sure = ''; renderStock(); }, 6000); return; }
+  b.dataset.sure = '';
+  try { await post('/api/stock/settings', { stock_auto: on }); if (on) await api('/api/stock/push', { method: 'POST' }); toast(on ? 'Automatic stock sync is on' : 'Automatic stock sync is off'); setTimeout(renderStock, on ? 2500 : 0); } catch (e) { toast(e.message); }
+};
+$('stCap').addEventListener('change', async () => { try { await post('/api/stock/settings', { stock_cap: +$('stCap').value || 0 }); renderStock(); } catch (e) { toast(e.message); } });
+$('stShowPlan').onclick = () => { $('stPlanWrap').hidden = !$('stPlanWrap').hidden; $('stShowPlan').textContent = $('stPlanWrap').hidden ? 'Show which listings' : 'Hide the list'; };
+$('stPushBtn').onclick = async () => {
+  const b = $('stPushBtn'); if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = 'Click again to update eBay'; setTimeout(() => { b.dataset.sure = ''; b.textContent = 'Update eBay now'; }, 6000); return; }
+  b.dataset.sure = ''; b.textContent = 'Update eBay now';
+  try { await api('/api/stock/push', { method: 'POST' }); toast('Updating quantities on eBay…'); setTimeout(renderStock, 4000); } catch (e) { toast(e.message); }
+};
+
 // ---------------------------------------------------------------- eBay
 let EBS = null, cpRows = [], jobTimer = null;
 async function renderEbay() {
@@ -825,7 +926,7 @@ $('adFile').onchange = async e => {
 };
 
 // ---------------------------------------------------------------- wiring
-const titles = { dash: 'Dashboard', orders: 'Sold items', traffic: 'Traffic', edit: 'Bulk edit', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
+const titles = { dash: 'Dashboard', orders: 'Sold items', traffic: 'Traffic', edit: 'Bulk edit', stock: 'Stock sync', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
 let page = 'dash';
 function show(p) {
   page = p; document.querySelectorAll('[data-p]').forEach(s => s.hidden = s.id !== 'p-' + p);
@@ -842,6 +943,7 @@ function renderAll() {
   if (page === 'orders') renderOrders();
   if (page === 'traffic') renderTraffic();
   if (page === 'edit') renderEdit();
+  if (page === 'stock') renderStock();
   if (page === 'cogs') { renderBands(); renderCogs(); }
   if (page === 'charts') renderCharts();
   if (page === 'uploads') renderUploads();

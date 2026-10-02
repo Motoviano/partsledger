@@ -18,6 +18,7 @@
       <button data-page="orders"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Sold items</span></button>
       <button data-page="traffic"><svg viewBox="0 0 24 24"><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span>Traffic</span></button>
       <button data-page="edit"><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg><span>Bulk edit</span></button>
+      <button data-page="stock"><svg viewBox="0 0 24 24"><path d="M3 8l9-5 9 5v8l-9 5-9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg><span>Stock sync</span></button>
       <button data-page="cogs"><svg viewBox="0 0 24 24"><path d="M20 12l-8 8-9-9V3h8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg><span>COGS</span></button>
       <button data-page="charts"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span>Charts</span></button>
       <button data-page="uploads"><svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg><span>Uploads</span></button>
@@ -140,6 +141,38 @@
         <div class="panel-head"><div><h2>Recent edits</h2><p>Every change keeps the old value. Undo puts back everything a job changed.</p></div></div>
         <div class="tbl-wrap"><table id="edJobs"></table></div>
         <div id="edJob"></div>
+      </div>
+    </section>
+
+    <section id="p-stock" data-p hidden>
+      <div class="panel">
+        <div class="panel-head"><div><h2>Stock sync</h2><p>One stock number per SKU. Every listing of that SKU on every account shows that quantity. New orders are checked every 10 minutes; sold units come off the number and the other listings are updated.</p></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button class="btn" type="button" id="stAuto"></button></div></div>
+        <div class="form-row">
+          <div class="f"><label for="stCap">Show at most (0 = full stock)</label><input type="number" id="stCap" min="0" step="1" style="width:90px"></div>
+          <span class="muted" id="stCapNote" style="padding-bottom:9px"></span>
+        </div>
+        <div class="tbl-wrap"><table id="stAcc"></table></div>
+        <div class="form-row"><span id="stPending" class="muted"></span><button class="btn primary" type="button" id="stPushBtn" hidden>Update eBay now</button><button class="link" type="button" id="stShowPlan" hidden>Show which listings</button></div>
+        <div class="tbl-wrap" id="stPlanWrap" hidden><table id="stPlan"></table></div>
+      </div>
+      <div class="panel" style="margin-top:14px">
+        <div class="panel-head"><div><h2>Stock per SKU</h2><p id="stSub"></p></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><span class="muted" id="stDirty"></span><button class="btn primary" type="button" id="stSave" disabled>Save stock</button></div></div>
+        <div class="form-row">
+          <div class="f"><label for="stSearch">SKU or title contains</label><input type="search" id="stSearch" style="width:200px"></div>
+          <div class="f"><label for="stShow">Show</label><select id="stShow"><option value="multi">On 2 or more accounts</option><option value="all">All SKUs</option><option value="unset">No stock number yet</option><option value="synced">Synced</option><option value="off">Sync turned off</option><option value="diff">Different on eBay</option></select></div>
+          <button class="btn" type="button" id="stFillMin">Fill empty from eBay (lowest)</button>
+          <button class="btn" type="button" id="stFillMax">Fill empty from eBay (highest)</button>
+          <button class="btn" type="button" id="stOff">Turn sync off for shown</button>
+          <button class="btn" type="button" id="stOn">Turn sync on for shown</button>
+        </div>
+        <div class="tbl-wrap"><table id="stTable"></table></div>
+        <div class="more"><button class="btn" id="stMore" type="button">Show more</button></div>
+      </div>
+      <div class="grid2" style="margin-top:14px">
+        <div class="panel"><div class="panel-head"><div><h2>Stock changes</h2><p>Sales and numbers set by hand.</p></div></div><div class="tbl-wrap"><table id="stLog"></table></div></div>
+        <div class="panel"><div class="panel-head"><div><h2>eBay updates</h2><p>Quantities sent to listings.</p></div></div><div class="tbl-wrap"><table id="stPushes"></table></div></div>
       </div>
     </section>
 

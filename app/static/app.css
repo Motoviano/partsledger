@@ -213,3 +213,8 @@ a.btn{text-decoration:none;display:inline-block}
 .sub{display:block;font-size:11px;color:var(--muted);font-weight:400;white-space:nowrap}
 .title-in + .tlen{display:block}
 .s .link{font-family:var(--body);font-size:12px}
+.qchips{display:flex;flex-wrap:wrap;gap:4px}
+.qchip{display:inline-flex;gap:4px;align-items:center;font-size:12px;border:1px solid var(--line);border-radius:99px;padding:1px 8px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.qchip.off{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-ink)}
+.btn.on{background:var(--good-soft);color:var(--good);border-color:var(--good)}
+.btn:disabled{opacity:.45;cursor:default}

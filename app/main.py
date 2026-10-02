@@ -16,6 +16,7 @@ from . import importers as IM
 from . import profit as PR
 from . import ebay as EB
 from . import edits as ED
+from . import stock as ST
 from .auth import check_pw, ensure_admin, hash_pw
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -33,11 +34,13 @@ def startup():
         con.executescript(EB.SCHEMA)
         EB.migrate(con)
         con.executescript(ED.SCHEMA)
+        con.executescript(ST.SCHEMA)
         con.execute("UPDATE edit_jobs SET status='stopped' WHERE status IN ('queued','running')")
         con.execute("UPDATE ebay_jobs SET status='stopped' WHERE status IN ('queued','running')")
         ensure_admin(con)
     if os.environ.get("DISABLE_SYNC") != "1":
         EB.start_scheduler(DB.db)
+        ST.start_scheduler(DB.db)
 
 
 def uk_today():
@@ -484,6 +487,63 @@ def edit_undo(job_id: int, request: Request):
         con.execute("UPDATE edit_jobs SET undone_by=? WHERE id=?", (jid, job_id))
     ED.start(DB.db, jid)
     return {"job": jid}
+
+
+# ------------------------------------------------------------------ stock sync
+@app.get("/api/stock")
+def stock(request: Request):
+    need_user(request)
+    with DB.db() as con:
+        st = ST.get_settings(con)
+        by = ST.listings_by_sku(con)
+        pool = {r["sku"]: dict(r) for r in con.execute("SELECT * FROM stock_pool")}
+        accs = [dict(r) for r in con.execute("""SELECT a.id,a.name,a.color,s.oos_control,s.last_check,s.last_status,s.last_message
+            FROM accounts a JOIN ebay_tokens t ON t.account_id=a.id LEFT JOIN stock_state s ON s.account_id=a.id ORDER BY a.sort,a.id""")]
+        skus = []
+        for sku in sorted(set(by) | set(pool)):
+            p = pool.get(sku) or {}
+            ls = by.get(sku, [])
+            skus.append({"sku": sku, "group": PR.group_of(sku), "title": (ls[0]["title"] if ls else "") or "",
+                         "on_hand": p.get("on_hand"), "enabled": p.get("enabled", 1), "set_at": p.get("set_at"),
+                         "listings": [[l["account_id"], l["item_id"], l["qty"]] for l in ls]})
+        log = [dict(r) for r in con.execute("SELECT l.*, a.name AS account FROM stock_log l LEFT JOIN accounts a ON a.id=l.account_id ORDER BY l.id DESC LIMIT 150")]
+        pushes = [dict(r) for r in con.execute("SELECT p.*, a.name AS account FROM stock_push p LEFT JOIN accounts a ON a.id=p.account_id ORDER BY p.id DESC LIMIT 150")]
+        pending = ST.plan(con)
+    return {"settings": st, "accounts": accs, "skus": skus, "log": log, "pushes": pushes,
+            "plan": [[r["account_id"], r["item_id"], r["sku"], r["qty"], r["new_qty"], r["blocked"]] for r in pending]}
+
+
+@app.post("/api/stock/set")
+async def stock_set(request: Request):
+    u = need_user(request)
+    b = await request.json()
+    items = b.get("items") or []
+    for it in items:
+        if it.get("on_hand") not in (None, "") and not (0 <= int(it["on_hand"]) <= 99999):
+            raise HTTPException(400, "Stock must be between 0 and 99,999.")
+    with DB.db() as con:
+        n = ST.set_stock(con, items, u["email"])
+    return {"saved": n}
+
+
+@app.post("/api/stock/settings")
+async def stock_settings(request: Request):
+    need_user(request)
+    b = await request.json()
+    with DB.db() as con:
+        if "stock_auto" in b:
+            ST.set_setting(con, "stock_auto", bool(b["stock_auto"]))
+        if "stock_cap" in b:
+            ST.set_setting(con, "stock_cap", max(0, int(b["stock_cap"] or 0)))
+        return ST.get_settings(con)
+
+
+@app.post("/api/stock/push")
+def stock_push(request: Request):
+    need_user(request)
+    import threading
+    threading.Thread(target=ST.cycle, args=(DB.db,), kwargs={"force_push": True}, daemon=True).start()
+    return {"ok": True}
 
 
 @app.get("/ebay/connect/{account_id}")
