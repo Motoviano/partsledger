@@ -32,7 +32,12 @@ SCOPES = [
     "https://api.ebay.com/oauth/api_scope/sell.fulfillment",
     "https://api.ebay.com/oauth/api_scope/sell.finances",
     "https://api.ebay.com/oauth/api_scope/sell.marketing",
+    "https://api.ebay.com/oauth/api_scope/sell.analytics.readonly",
 ]
+# What accounts connected before traffic was added were granted. A refresh must ask for no more than
+# the account agreed to, so older connections keep working until they're reconnected.
+LEGACY_SCOPES = SCOPES[:6]
+ANALYTICS_SCOPE = "https://api.ebay.com/oauth/api_scope/sell.analytics.readonly"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS ebay_tokens(
@@ -123,12 +128,32 @@ def save_connection(con, account_id, tok, by):
     access, exp = tok["access_token"], time.time() + int(tok.get("expires_in", 7200)) - 120
     user = get_user_id(access)
     rexp = time.strftime("%Y-%m-%d", time.gmtime(time.time() + int(tok.get("refresh_token_expires_in", 0))))
-    con.execute("""INSERT INTO ebay_tokens(account_id,ebay_user,refresh_token,refresh_expires,access_token,access_expires,connected_by)
-                   VALUES(?,?,?,?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET ebay_user=excluded.ebay_user,
+    con.execute("""INSERT INTO ebay_tokens(account_id,ebay_user,refresh_token,refresh_expires,access_token,access_expires,connected_by,scopes)
+                   VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET ebay_user=excluded.ebay_user,
                    refresh_token=excluded.refresh_token,refresh_expires=excluded.refresh_expires,access_token=excluded.access_token,
-                   access_expires=excluded.access_expires,connected_by=excluded.connected_by,connected_at=CURRENT_TIMESTAMP""",
-                (account_id, user, tok["refresh_token"], rexp, access, exp, by))
+                   access_expires=excluded.access_expires,connected_by=excluded.connected_by,scopes=excluded.scopes,connected_at=CURRENT_TIMESTAMP""",
+                (account_id, user, tok["refresh_token"], rexp, access, exp, by, " ".join(SCOPES)))
     return user
+
+
+def migrate(con):
+    """Add columns introduced after the first release."""
+    def add(table, col, typ):
+        if col not in {r[1] for r in con.execute(f"PRAGMA table_info({table})")}:
+            con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+    add("ebay_tokens", "scopes", "TEXT")
+    add("sync_state", "last_traffic_sync", "TEXT")
+    add("sync_state", "traffic_status", "TEXT")
+    add("sync_state", "traffic_message", "TEXT")
+
+
+def granted(row):
+    return (row["scopes"] if row and row["scopes"] else " ".join(LEGACY_SCOPES)).split()
+
+
+def has_scope(con, account_id, scope):
+    r = con.execute("SELECT scopes FROM ebay_tokens WHERE account_id=?", (account_id,)).fetchone()
+    return bool(r) and scope in granted(r)
 
 
 def access_token(con, account_id):
@@ -137,7 +162,7 @@ def access_token(con, account_id):
         raise EbayError("This account isn't connected to eBay yet.")
     if r["access_token"] and (r["access_expires"] or 0) > time.time():
         return r["access_token"]
-    j = _token_request({"grant_type": "refresh_token", "refresh_token": r["refresh_token"], "scope": " ".join(SCOPES)})
+    j = _token_request({"grant_type": "refresh_token", "refresh_token": r["refresh_token"], "scope": " ".join(granted(r))})
     con.execute("UPDATE ebay_tokens SET access_token=?, access_expires=? WHERE account_id=?",
                 (j["access_token"], time.time() + int(j.get("expires_in", 7200)) - 120, account_id))
     con.commit()
@@ -804,6 +829,118 @@ def sync_account(db_factory, account_id, days_back=3, listings=True):
     return "; ".join(msg)
 
 
+# ------------------------------------------------------------------ Traffic per listing (Analytics API)
+ANA = "https://api.ebay.com/sell/analytics/v1/traffic_report"
+TRAFFIC_METRICS = ["LISTING_IMPRESSION_TOTAL", "LISTING_IMPRESSION_SEARCH_RESULTS_PAGE", "LISTING_VIEWS_TOTAL",
+                   "LISTING_VIEWS_SOURCE_SEARCH_RESULTS_PAGE", "TRANSACTION"]
+TRAFFIC_COLS = ["impressions", "search_impressions", "views", "search_views", "transactions"]
+TRAFFIC_BACKFILL_DAYS = 30
+TRAFFIC_REFRESH_DAYS = 3  # eBay finalises traffic a day or two late, so the newest days are fetched again
+
+SCHEMA += """
+CREATE TABLE IF NOT EXISTS traffic(
+  account_id INTEGER NOT NULL, item_id TEXT NOT NULL, date TEXT NOT NULL,
+  impressions INTEGER, search_impressions INTEGER, views INTEGER, search_views INTEGER, transactions INTEGER,
+  PRIMARY KEY(account_id, item_id, date));
+CREATE INDEX IF NOT EXISTS traffic_date ON traffic(account_id, date);
+CREATE TABLE IF NOT EXISTS traffic_days(
+  account_id INTEGER NOT NULL, date TEXT NOT NULL, listings INTEGER, fetched_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(account_id, date));
+"""
+
+
+def _num(v):
+    try:
+        return int(round(float(v)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def fetch_traffic_day(token, day, item_ids, sign=None):
+    """Traffic for one day (YYYY-MM-DD) for up to 200 listings: {item_id: [impressions, search impr, views, search views, sold]}."""
+    d = day.replace("-", "")
+    flt = f"marketplace_ids:{{EBAY_GB}},date_range:[{d}..{d}],listing_ids:{{{'|'.join(item_ids)}}}"
+    url = (f"{ANA}?dimension=LISTING&metric={','.join(TRAFFIC_METRICS)}&filter="
+           + urllib.parse.quote(flt, safe=",:."))
+    try:
+        j = _get_json(url, token, marketplace=False)
+    except EbayError as e:
+        if sign and "signature" in str(e).lower():
+            j = _get_json(url, token, marketplace=False, sign=sign)
+        else:
+            raise
+    keys = [m.get("key") for m in (j.get("header") or {}).get("metrics") or []] or TRAFFIC_METRICS
+    out = {}
+    for rec in j.get("records") or []:
+        dv = rec.get("dimensionValues") or []
+        if not dv:
+            continue
+        lid = str(dv[0].get("value"))
+        vals = {k: _num((mv or {}).get("value")) for k, mv in zip(keys, rec.get("metricValues") or [])}
+        out[lid] = [vals.get(k, 0) for k in TRAFFIC_METRICS]
+    return out
+
+
+def active_listing_ids(con, account_id):
+    """Listings seen in the newest listings sync or upload for the account (older rows have ended)."""
+    newest = con.execute("SELECT MAX(updated_at) FROM listings WHERE account_id=?", (account_id,)).fetchone()[0]
+    if not newest:
+        return []
+    return [r[0] for r in con.execute("SELECT item_id FROM listings WHERE account_id=? AND updated_at>=date(?, '-1 day')",
+                                      (account_id, newest))]
+
+
+def sync_traffic(db_factory, account_id, max_calls=400):
+    import datetime as _dt
+    today = _dt.date.today()
+    yday = today - _dt.timedelta(days=1)
+    with db_factory() as con:
+        if not has_scope(con, account_id, ANALYTICS_SCOPE):
+            con.execute("UPDATE sync_state SET traffic_status='reconnect', traffic_message=? WHERE account_id=?",
+                        ("Reconnect this account to allow traffic data", account_id))
+            return "traffic needs a reconnect"
+        tok = access_token(con, account_id)
+        sign = signing_key(con)
+        ids = active_listing_ids(con, account_id)
+        have = {r[0] for r in con.execute("SELECT date FROM traffic_days WHERE account_id=?", (account_id,))}
+    if not ids:
+        return "no active listings to check traffic for"
+    refresh_from = (yday - _dt.timedelta(days=TRAFFIC_REFRESH_DAYS - 1)).isoformat()
+    days = [(yday - _dt.timedelta(days=i)).isoformat() for i in range(TRAFFIC_BACKFILL_DAYS)]
+    days = [d for d in days if d not in have or d >= refresh_from]  # newest first, so a cut-short run still gets recent days
+    batches = [ids[i:i + 200] for i in range(0, len(ids), 200)]
+    calls = done = 0
+    note = ""
+    for day in days:
+        if calls + len(batches) > max_calls:
+            note = " (more days next sync)"
+            break
+        got = {}
+        try:
+            for b in batches:
+                got.update(fetch_traffic_day(tok, day, b, sign))
+                calls += 1
+        except EbayError as e:
+            msg = str(e)
+            if "date" in msg.lower() and day >= refresh_from:
+                continue  # eBay hasn't published this day yet
+            with db_factory() as con:
+                con.execute("UPDATE sync_state SET last_traffic_sync=datetime('now'), traffic_status='error', traffic_message=? WHERE account_id=?",
+                            (f"Traffic stopped at {day}: {msg}"[:500], account_id))
+            return f"traffic error: {msg[:150]}"
+        with db_factory() as con:
+            con.execute("DELETE FROM traffic WHERE account_id=? AND date=?", (account_id, day))
+            con.executemany("INSERT INTO traffic(account_id,item_id,date,impressions,search_impressions,views,search_views,transactions) VALUES(?,?,?,?,?,?,?,?)",
+                            [(account_id, k, day, *v) for k, v in got.items() if any(v)])
+            con.execute("INSERT OR REPLACE INTO traffic_days(account_id,date,listings) VALUES(?,?,?)", (account_id, day, len(ids)))
+        done += 1
+    msg = f"{len(ids)} listings, {done} days updated{note}"
+    with db_factory() as con:
+        con.execute("UPDATE sync_state SET last_traffic_sync=datetime('now'), traffic_status='ok', traffic_message=? WHERE account_id=?",
+                    (msg, account_id))
+    return msg
+
+
 def sync_all(db_factory, listings=True):
     with db_factory() as con:
         ids = [r["account_id"] for r in con.execute("SELECT account_id FROM ebay_tokens")]
@@ -817,6 +954,17 @@ def sync_all(db_factory, listings=True):
                             "ON CONFLICT(account_id) DO UPDATE SET last_status='error', last_message=excluded.last_message, last_tx_sync=datetime('now')",
                             (a, str(e)[:500]))
             res[a] = "error: " + str(e)[:200]
+            continue
+        # Traffic: with each listings sync (every 6 hours / Sync now), or straight away if never fetched
+        with db_factory() as con:
+            st = con.execute("SELECT last_traffic_sync FROM sync_state WHERE account_id=?", (a,)).fetchone()
+        if listings or not (st and st["last_traffic_sync"]):
+            try:
+                res[a] += "; " + sync_traffic(db_factory, a)
+            except Exception as e:
+                with db_factory() as con:
+                    con.execute("UPDATE sync_state SET last_traffic_sync=datetime('now'), traffic_status='error', traffic_message=? WHERE account_id=?",
+                                (str(e)[:500], a))
     return res
 
 

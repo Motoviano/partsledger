@@ -16,6 +16,7 @@
     <nav id="nav">
       <button data-page="dash"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="8" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="15" width="7" height="6" rx="1"/></svg><span>Dashboard</span></button>
       <button data-page="orders"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Sold items</span></button>
+      <button data-page="traffic"><svg viewBox="0 0 24 24"><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span>Traffic</span></button>
       <button data-page="cogs"><svg viewBox="0 0 24 24"><path d="M20 12l-8 8-9-9V3h8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg><span>COGS</span></button>
       <button data-page="charts"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span>Charts</span></button>
       <button data-page="uploads"><svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg><span>Uploads</span></button>
@@ -66,6 +67,18 @@
           <div style="display:flex;gap:8px;flex-wrap:wrap"><input type="search" id="ordSearch" placeholder="Search order, SKU or product" aria-label="Search sold items"><button class="btn" type="button" id="ordCsv">Export CSV</button></div></div>
         <div class="tbl-wrap"><table id="ordTable"></table></div>
         <div class="more"><button class="btn" id="ordMore" type="button">Show more</button></div>
+      </div>
+    </section>
+
+    <section id="p-traffic" data-p hidden>
+      <p class="notice" id="trNotice" hidden></p>
+      <div class="stats" id="trStats"></div>
+      <div class="flagbar" id="trFlags" role="group" aria-label="Show listings"></div>
+      <div class="panel" style="margin-top:14px">
+        <div class="panel-head"><div><h2>Traffic per listing</h2><p id="trSub"></p></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap"><input type="search" id="trSearch" placeholder="Search SKU, product or item number" aria-label="Search listings"><button class="btn" type="button" id="trCsv">Export CSV</button></div></div>
+        <div class="tbl-wrap"><table id="trTable"></table></div>
+        <div class="more"><button class="btn" id="trMore" type="button">Show more</button></div>
       </div>
     </section>
 
@@ -121,7 +134,7 @@
 
     <section id="p-ebay" data-p hidden>
       <div class="panel">
-        <div class="panel-head"><div><h2>eBay connections</h2><p>Connected accounts sync every hour: orders, fees, ads, postage labels and refunds (listings every 6 hours).</p></div>
+        <div class="panel-head"><div><h2>eBay connections</h2><p>Connected accounts sync every hour: orders, fees, ads, postage labels and refunds (listings and traffic per listing every 6 hours).</p></div>
           <button class="btn" type="button" id="syncNow" hidden>Sync now</button></div>
         <p class="notice" id="ebaySetup" style="margin:14px" hidden></p>
         <div class="tbl-wrap"><table id="ebayAcc"></table></div>

@@ -30,6 +30,7 @@ def startup():
     DB.init()
     with DB.db() as con:
         con.executescript(EB.SCHEMA)
+        EB.migrate(con)
         con.execute("UPDATE ebay_jobs SET status='stopped' WHERE status IN ('queued','running')")
         ensure_admin(con)
     if os.environ.get("DISABLE_SYNC") != "1":
@@ -360,7 +361,8 @@ def backup(request: Request):
 def ebay_status(request: Request):
     need_user(request)
     with DB.db() as con:
-        toks = {r["account_id"]: dict(r) for r in con.execute("SELECT account_id,ebay_user,refresh_expires,connected_at,connected_by FROM ebay_tokens")}
+        toks = {r["account_id"]: {**{k: r[k] for k in ("account_id", "ebay_user", "refresh_expires", "connected_at", "connected_by")},
+                                  "traffic": EB.ANALYTICS_SCOPE in EB.granted(r)} for r in con.execute("SELECT * FROM ebay_tokens")}
         accs = [dict(r) for r in con.execute("SELECT id,name,seller_id,color FROM accounts WHERE channel='ebay' ORDER BY sort,id")]
         sync = {r["account_id"]: dict(r) for r in con.execute("SELECT * FROM sync_state")}
     for a in accs:
@@ -368,6 +370,34 @@ def ebay_status(request: Request):
         a["sync"] = sync.get(a["id"])
     return {"configured": EB.configured(), "missing": EB.missing_settings(), "accounts": accs,
             "callbackHint": (os.environ.get("PUBLIC_URL", "").rstrip("/") + "/ebay/callback") if os.environ.get("PUBLIC_URL") else None}
+
+
+@app.get("/api/traffic")
+def traffic(request: Request, start: str, end: str):
+    """Traffic per listing for a date range, with SKU, group, price and stock, including active listings with no traffic."""
+    need_user(request)
+    with DB.db() as con:
+        sku_map = {r["item_id"]: r["sku"] for r in con.execute("SELECT item_id,sku FROM sku_map")}
+        rows = {}
+        for r in con.execute("""SELECT account_id,item_id,SUM(impressions) i,SUM(search_impressions) si,SUM(views) v,SUM(search_views) sv,
+                                SUM(transactions) t FROM traffic WHERE date BETWEEN ? AND ? GROUP BY account_id,item_id""", (start, end)):
+            rows[(r["account_id"], r["item_id"])] = [r["i"] or 0, r["si"] or 0, r["v"] or 0, r["sv"] or 0, r["t"] or 0]
+        cover = {}
+        for r in con.execute("SELECT account_id,MIN(date) a,MAX(date) b,COUNT(*) n FROM traffic_days WHERE date BETWEEN ? AND ? GROUP BY account_id", (start, end)):
+            cover[r["account_id"]] = {"from": r["a"], "to": r["b"], "days": r["n"]}
+        listing = {}
+        for a in con.execute("SELECT DISTINCT account_id FROM listings"):
+            for item_id in EB.active_listing_ids(con, a[0]):
+                listing[(a[0], item_id)] = True
+        info = {(r["account_id"], r["item_id"]): r for r in con.execute("SELECT account_id,item_id,sku,title,price,qty FROM listings")}
+        tracked = {r[0] for r in con.execute("SELECT DISTINCT account_id FROM traffic_days")}
+        out = []
+        for key in set(rows) | {k for k in listing if k[0] in tracked}:
+            l = info.get(key)
+            sku = sku_map.get(key[1]) or (l["sku"] if l else None) or ""
+            out.append([key[0], key[1], sku, PR.group_of(sku), (l["title"] if l else "") or "", l["price"] if l else None,
+                        l["qty"] if l else None, 1 if key in listing else 0, *rows.get(key, [0, 0, 0, 0, 0])])
+    return {"rows": out, "coverage": cover}
 
 
 @app.get("/ebay/connect/{account_id}")

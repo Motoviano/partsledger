@@ -183,3 +183,20 @@ a.btn{text-decoration:none;display:inline-block}
 @media (max-width:1180px){.tiles{grid-template-columns:repeat(3,minmax(0,1fr))!important}}
 @media (max-width:860px){.tiles{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
 @media (max-width:520px){.tiles{grid-template-columns:1fr!important}}
+
+/* traffic */
+.stats{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}
+.stat{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+.stat small{display:block;font-size:12px;color:var(--muted)}
+.stat b{font-family:var(--display);font-size:28px;font-weight:600;font-variant-numeric:tabular-nums}
+.stat span{display:block;font-size:12px;color:var(--muted)}
+.flagbar{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.flagbar button{font:inherit;font-size:13px;font-weight:600;cursor:pointer;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:99px;padding:6px 12px;display:flex;gap:8px;align-items:center}
+.flagbar button[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-ink)}
+.flagbar button em{font-style:normal;font-variant-numeric:tabular-nums;color:var(--muted)}
+.flagbar button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.next{display:block;font-size:12px;color:var(--muted);margin-top:2px;white-space:normal;min-width:180px}
+#p-traffic .notice{margin-bottom:14px}
+@media (max-width:1100px){.stats{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:620px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.stat b{font-size:22px}}
+.prod .s a{color:var(--accent-ink)}

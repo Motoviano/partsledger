@@ -346,6 +346,95 @@ $('myPw').onsubmit = async e => { e.preventDefault(); try { await post(`/api/use
 $('backupBtn').onclick = () => { location.href = '/api/backup'; };
 
 
+// ---------------------------------------------------------------- traffic
+// Flags: what each listing most needs, checked in this order
+const FLAGS = {
+  oos: { name: 'Out of stock', chip: 'm', next: 'Restock it or end the listing' },
+  noimp: { name: 'No impressions', chip: 'm', next: 'Not showing in search: check title keywords, category and item specifics' },
+  lowctr: { name: 'Seen, rarely clicked', chip: 'ret', next: 'Shows in search but few click: improve the main photo, price or the start of the title' },
+  nosale: { name: 'Views, no sales', chip: 'ret', next: 'People look but don\'t buy: check price against others, postage cost and fitment' },
+  sell: { name: 'Selling', chip: 'k', next: '' },
+};
+const pctS = v => v === 0 ? '0%' : isFinite(v) ? (v * 100).toFixed(v < 0.01 ? 2 : 1) + '%' : '–';
+const TR_MIN_IMPR = 300, TR_LOW_CTR = 0.01, TR_MIN_VIEWS = 20;
+let TR = null, trKey = '', trFlag = 'attn';
+const trState = { sort: { i: 3, asc: false }, limit: 100, render: renderTraffic, empty: 'No listings match.' };
+function flagOf(r) {
+  if (r.active && r.qty === 0) return 'oos';
+  if (r.units > 0) return 'sell';
+  if (r.active && r.imp === 0) return 'noimp';
+  if (r.imp >= TR_MIN_IMPR && r.v / r.imp < TR_LOW_CTR) return 'lowctr';
+  if (r.v >= TR_MIN_VIEWS) return 'nosale';
+  return '';
+}
+async function renderTraffic() {
+  const f = F(); if ($('fPeriod').value === 'all') f.r = [addD(TODAY, -30), addD(TODAY, -1)];  // traffic is kept for the last 30 days
+  if ($('fPeriod').value === 'all') $('rangeNote').textContent = `${nice(f.r[0])} – ${nice(f.r[1])} · traffic is kept for the last 30 days`;
+  const key = f.r.join('|');
+  if (trKey !== key) {
+    $('trSub').textContent = 'Loading…';
+    try { TR = await api(`/api/traffic?start=${f.r[0]}&end=${f.r[1]}`); trKey = key; } catch (e) { toast(e.message); return; }
+  }
+  // sales and profit from the money data, by account + item number
+  const sold = new Map();
+  itemsIn({ ...f, g: new Set(groups) }, f.r).forEach(x => {
+    const k = x.a + '|' + x.id, s = sold.get(k) || { u: 0, p: 0, s: 0, sku: x.sku, g: x.g, t: x.t }; s.u += x.q; s.p += profitOf(x); s.s += x.s; sold.set(k, s);
+  });
+  const q = $('trSearch').value.toLowerCase();
+  const all = TR.rows.map(r => {
+    const a = AIDX[r[0]], s = sold.get(a + '|' + r[1]);
+    const sku = r[2] || (s && s.sku) || '', g = !r[2] && s ? s.g : r[3];
+    const o = { a, id: r[1], sku, g, t: r[4] || (s && s.t) || '', price: r[5], qty: r[6], active: !!r[7], imp: r[8], simp: r[9], v: r[10], sv: r[11], tx: r[12],
+      units: s ? s.u : 0, p: s ? s.p : 0, s: s ? s.s : 0 };
+    o.flag = flagOf(o); return o;
+  }).filter(r => r.a !== undefined && f.a.has(r.a) && (f.allG || f.g.has(r.g)));
+  // summary
+  const T = all.reduce((t, r) => { t.imp += r.imp; t.v += r.v; t.u += r.units; t.p += r.p; return t; }, { imp: 0, v: 0, u: 0, p: 0 });
+  const cnt = {}; all.forEach(r => cnt[r.flag] = (cnt[r.flag] || 0) + 1);
+  const attn = (cnt.noimp || 0) + (cnt.lowctr || 0) + (cnt.nosale || 0);
+  const stat = (k, v, sub) => `<div class="stat"><small>${k}</small><b>${v}</b>${sub ? `<span>${sub}</span>` : ''}</div>`;
+  $('trStats').innerHTML = stat('Listings', n0(all.filter(r => r.active).length), 'active') + stat('Impressions', n0(T.imp), 'times shown on eBay') +
+    stat('Views', n0(T.v), 'listing page opened') + stat('Click-through', pct(T.imp ? T.v / T.imp : NaN), 'views ÷ impressions') +
+    stat('Sold', n0(T.u), 'units in this period') + stat('Conversion', pctS(T.v ? T.u / T.v : NaN), 'units ÷ views');
+  const fb = [['attn', 'Needs attention (in stock)', attn], ['all', 'All listings', all.length], ...Object.entries(FLAGS).map(([k, x]) => [k, x.name, cnt[k] || 0])];
+  $('trFlags').innerHTML = fb.map(([k, n, c]) => `<button type="button" data-flag="${k}" aria-pressed="${trFlag === k}">${n} <em>${n0(c)}</em></button>`).join('');
+  $('trFlags').querySelectorAll('[data-flag]').forEach(b => b.onclick = () => { trFlag = b.dataset.flag; trState.limit = 100; renderTraffic(); });
+  // coverage / setup notice
+  const cov = Object.entries(TR.coverage || {}).filter(([id]) => f.a.has(AIDX[id]));
+  const days = Math.round((dt(f.r[1]) - dt(f.r[0])) / 864e5) + 1;
+  let note = '';
+  if (!TR.rows.length && !cov.length) note = 'No traffic data yet. On the eBay page, click <b>Reconnect</b> for each account to allow traffic data, then <b>Sync now</b>. The last 30 days load in a few minutes.';
+  else if (cov.length) {
+    const lo = cov.map(c => c[1].from).sort()[0], hi = cov.map(c => c[1].to).sort().pop(), n = Math.max(...cov.map(c => c[1].days));
+    if (n < days) note = `eBay traffic covers ${nice(lo)} – ${nice(hi)} (${n} of the ${days} days chosen). eBay publishes traffic a day late, and Partsledger keeps it from ${TRAFFIC_START()} onwards. Sales and profit cover the whole period.`;
+  }
+  $('trNotice').innerHTML = note; $('trNotice').hidden = !note;
+  // table
+  const rows = all.filter(r => (trFlag === 'all' || (trFlag === 'attn' ? ['noimp', 'lowctr', 'nosale'].includes(r.flag) : r.flag === trFlag)) &&
+    (!q || r.sku.toLowerCase().includes(q) || r.t.toLowerCase().includes(q) || r.id.includes(q)));
+  $('trSub').textContent = `${rows.length} listings · ${nice(f.r[0])} – ${nice(f.r[1])}. Flags: under ${pct(TR_LOW_CTR)} click-through after ${TR_MIN_IMPR}+ impressions, or ${TR_MIN_VIEWS}+ views with no sale.`;
+  const cols = [
+    { h: 'Listing', l: 1, cl: 'prod', v: r => r.sku || r.t, f: r => `<span class="t">${esc(r.t)}</span><span class="s"><span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)} · ${esc(r.sku || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(r.id)}" target="_blank" rel="noopener">${esc(r.id)}</a></span>` },
+    { h: 'Price', v: r => r.price ?? -1, f: r => r.price != null ? gbp(r.price) : '–' },
+    { h: 'Stock', v: r => r.qty ?? -1, f: r => r.active ? n0(r.qty) : '<span class="muted">ended</span>' },
+    { h: 'Impressions', v: r => r.imp, f: r => n0(r.imp) },
+    { h: 'Views', v: r => r.v, f: r => n0(r.v) },
+    { h: 'Click-through', v: r => r.imp ? r.v / r.imp : -1, f: r => r.imp ? pct(r.v / r.imp) : '–' },
+    { h: 'Sold', v: r => r.units, f: r => n0(r.units) },
+    { h: 'Conversion', v: r => r.v ? r.units / r.v : -1, f: r => r.v ? pctS(r.units / r.v) : '–' },
+    { h: 'Profit', v: r => r.p, f: r => r.units ? money(r.p) : '–' },
+    { h: 'What to do', l: 1, v: r => r.flag, f: r => r.flag ? `<span class="chip ${FLAGS[r.flag].chip}">${FLAGS[r.flag].name}</span>${FLAGS[r.flag].next ? `<span class="next">${FLAGS[r.flag].next}</span>` : ''}` : '' }];
+  const S = rows.reduce((t, r) => { t.imp += r.imp; t.v += r.v; t.u += r.units; t.p += r.p; return t; }, { imp: 0, v: 0, u: 0, p: 0 });
+  table($('trTable'), cols, rows, ['Total', '', '', n0(S.imp), n0(S.v), pct(S.imp ? S.v / S.imp : NaN), n0(S.u), pctS(S.v ? S.u / S.v : NaN), money(S.p), ''], trState);
+  $('trMore').hidden = rows.length <= trState.limit;
+}
+const TRAFFIC_START = () => nice(addD(TODAY, -30));
+$('trMore').onclick = () => { trState.limit += 200; renderTraffic(); };
+$('trSearch').addEventListener('input', () => { trState.limit = 100; renderTraffic(); });
+$('trCsv').onclick = () => csv('traffic.csv', ['Account', 'Item number', 'SKU', 'Group', 'Title', 'Price', 'Stock', 'Impressions', 'Search impressions', 'Views', 'Views from search', 'Click-through', 'Sold', 'Conversion', 'Profit', 'Flag'],
+  (trState.rows || []).map(r => [ACC[r.a].name, r.id, r.sku, r.g, r.t, r.price ?? '', r.active ? r.qty : 'ended', r.imp, r.simp, r.v, r.sv, r.imp ? (r.v / r.imp * 100).toFixed(2) + '%' : '',
+    r.units, r.v ? (r.units / r.v * 100).toFixed(2) + '%' : '', r.p.toFixed(2), r.flag ? FLAGS[r.flag].name : '']));
+
 // ---------------------------------------------------------------- eBay
 let EBS = null, cpRows = [], jobTimer = null;
 async function renderEbay() {
@@ -358,8 +447,9 @@ async function renderEbay() {
     return `<tr><td class="l"><span class="dot" style="background:${a.color}"></span>${esc(a.name)}</td>
       <td class="l">${c ? `<span class="chip k">Connected as ${esc(c.ebay_user)}</span>` : '<span class="chip m">Not connected</span>'}</td>
       <td class="l">${c && c.refresh_expires ? nice(c.refresh_expires) : '–'}</td>
-      <td class="l prod">${sy && sy.last_tx_sync ? `${esc(sy.last_tx_sync.slice(0, 16))} UTC · ${sy.last_status === 'ok' ? '' : '<span class="chip m">Error</span> '}${esc(sy.last_message || '')}` : (c ? 'Waiting for first sync' : '–')}</td>
-      <td>${ME.is_admin ? `<a class="btn" href="/ebay/connect/${a.id}">${c ? 'Reconnect' : 'Connect'}</a>${c ? ` <button class="link danger" type="button" data-disc="${a.id}">Disconnect</button>` : ''}` : ''}</td></tr>`;
+      <td class="l prod">${sy && sy.last_tx_sync ? `${esc(sy.last_tx_sync.slice(0, 16))} UTC · ${sy.last_status === 'ok' ? '' : '<span class="chip m">Error</span> '}${esc(sy.last_message || '')}` : (c ? 'Waiting for first sync' : '–')}
+        ${c ? (!c.traffic ? '<br><span class="chip ret">Reconnect to add traffic data</span>' : sy && sy.traffic_message ? `<br><span class="muted">Traffic:</span> ${sy.traffic_status === 'error' ? '<span class="chip m">Error</span> ' : ''}${esc(sy.traffic_message)}` : '<br><span class="muted">Traffic: waiting for next sync</span>') : ''}</td>
+      <td>${ME.is_admin ? `<a class="btn ${c && !c.traffic ? 'primary' : ''}" href="/ebay/connect/${a.id}">${c ? 'Reconnect' : 'Connect'}</a>${c ? ` <button class="link danger" type="button" data-disc="${a.id}">Disconnect</button>` : ''}` : ''}</td></tr>`;
   }).join('')}</tbody>`;
   $('syncNow').hidden = !EBS.accounts.some(a => a.connection);
   document.querySelectorAll('[data-disc]').forEach(b => b.onclick = async () => {
@@ -414,7 +504,7 @@ async function startJob(mode) {
   } catch (e) { toast(e.message); }
 }
 $('cpVerify').onclick = () => startJob('verify');
-$('syncNow').onclick = async () => { try { await api('/api/ebay/sync', { method: 'POST' }); toast('Syncing with eBay… this takes a minute'); setTimeout(async () => { await load(); }, 45000); setTimeout(renderEbay, 8000); } catch (e) { toast(e.message); } };
+$('syncNow').onclick = async () => { try { await api('/api/ebay/sync', { method: 'POST' }); toast('Syncing with eBay… this takes a minute'); setTimeout(async () => { trKey = ''; await load(); }, 45000); setTimeout(renderEbay, 8000); } catch (e) { toast(e.message); } };
 $('cpCopy').onclick = () => {
   const b = $('cpCopy'); if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = 'Click again to create the listings'; setTimeout(() => { b.dataset.sure = ''; b.textContent = 'Copy selected'; }, 6000); return; }
   b.dataset.sure = ''; b.textContent = 'Copy selected'; startJob('copy');
@@ -457,7 +547,7 @@ $('adFile').onchange = async e => {
 };
 
 // ---------------------------------------------------------------- wiring
-const titles = { dash: 'Dashboard', orders: 'Sold items', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
+const titles = { dash: 'Dashboard', orders: 'Sold items', traffic: 'Traffic', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
 let page = 'dash';
 function show(p) {
   page = p; document.querySelectorAll('[data-p]').forEach(s => s.hidden = s.id !== 'p-' + p);
@@ -472,6 +562,7 @@ function renderAll() {
   $('rangeNote').textContent = `${nice(f.r[0])} – ${nice(f.r[1])}` + (ACC.some(a => f.a.has(a.i) && !a.hasData) ? ' · some selected accounts have no data yet' : '') + (!f.allG ? ' · other fees hidden when filtering by group' : '');
   if (page === 'dash') { renderTileMenu(); renderTiles(); renderProducts(); }
   if (page === 'orders') renderOrders();
+  if (page === 'traffic') renderTraffic();
   if (page === 'cogs') { renderBands(); renderCogs(); }
   if (page === 'charts') renderCharts();
   if (page === 'uploads') renderUploads();
