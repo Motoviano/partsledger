@@ -367,6 +367,20 @@ function flagOf(r) {
   if (r.v >= TR_MIN_VIEWS) return 'nosale';
   return '';
 }
+function trafficRows(TRd, f) {
+  // sales and profit from the money data, by account + item number
+  const sold = new Map();
+  itemsIn({ ...f, g: new Set(groups) }, f.r).forEach(x => {
+    const k = x.a + '|' + x.id, s = sold.get(k) || { u: 0, p: 0, s: 0, sku: x.sku, g: x.g, t: x.t }; s.u += x.q; s.p += profitOf(x); s.s += x.s; sold.set(k, s);
+  });
+  return TRd.rows.map(r => {
+    const a = AIDX[r[0]], s = sold.get(a + '|' + r[1]);
+    const sku = r[2] || (s && s.sku) || '', g = !r[2] && s ? s.g : r[3];
+    const o = { a, id: r[1], sku, g, t: r[4] || (s && s.t) || '', price: r[5], qty: r[6], active: !!r[7], imp: r[8], simp: r[9], v: r[10], sv: r[11], tx: r[12],
+      units: s ? s.u : 0, p: s ? s.p : 0, s: s ? s.s : 0 };
+    o.flag = flagOf(o); return o;
+  }).filter(r => r.a !== undefined && f.a.has(r.a) && (f.allG || f.g.has(r.g)));
+}
 async function renderTraffic() {
   const f = F(); if ($('fPeriod').value === 'all') f.r = [addD(TODAY, -30), addD(TODAY, -1)];  // traffic is kept for the last 30 days
   if ($('fPeriod').value === 'all') $('rangeNote').textContent = `${nice(f.r[0])} – ${nice(f.r[1])} · traffic is kept for the last 30 days`;
@@ -375,19 +389,8 @@ async function renderTraffic() {
     $('trSub').textContent = 'Loading…';
     try { TR = await api(`/api/traffic?start=${f.r[0]}&end=${f.r[1]}`); trKey = key; } catch (e) { toast(e.message); return; }
   }
-  // sales and profit from the money data, by account + item number
-  const sold = new Map();
-  itemsIn({ ...f, g: new Set(groups) }, f.r).forEach(x => {
-    const k = x.a + '|' + x.id, s = sold.get(k) || { u: 0, p: 0, s: 0, sku: x.sku, g: x.g, t: x.t }; s.u += x.q; s.p += profitOf(x); s.s += x.s; sold.set(k, s);
-  });
+  const all = trafficRows(TR, f);
   const q = $('trSearch').value.toLowerCase();
-  const all = TR.rows.map(r => {
-    const a = AIDX[r[0]], s = sold.get(a + '|' + r[1]);
-    const sku = r[2] || (s && s.sku) || '', g = !r[2] && s ? s.g : r[3];
-    const o = { a, id: r[1], sku, g, t: r[4] || (s && s.t) || '', price: r[5], qty: r[6], active: !!r[7], imp: r[8], simp: r[9], v: r[10], sv: r[11], tx: r[12],
-      units: s ? s.u : 0, p: s ? s.p : 0, s: s ? s.s : 0 };
-    o.flag = flagOf(o); return o;
-  }).filter(r => r.a !== undefined && f.a.has(r.a) && (f.allG || f.g.has(r.g)));
   // summary
   const T = all.reduce((t, r) => { t.imp += r.imp; t.v += r.v; t.u += r.units; t.p += r.p; return t; }, { imp: 0, v: 0, u: 0, p: 0 });
   const cnt = {}; all.forEach(r => cnt[r.flag] = (cnt[r.flag] || 0) + 1);
@@ -434,6 +437,200 @@ $('trSearch').addEventListener('input', () => { trState.limit = 100; renderTraff
 $('trCsv').onclick = () => csv('traffic.csv', ['Account', 'Item number', 'SKU', 'Group', 'Title', 'Price', 'Stock', 'Impressions', 'Search impressions', 'Views', 'Views from search', 'Click-through', 'Sold', 'Conversion', 'Profit', 'Flag'],
   (trState.rows || []).map(r => [ACC[r.a].name, r.id, r.sku, r.g, r.t, r.price ?? '', r.active ? r.qty : 'ended', r.imp, r.simp, r.v, r.sv, r.imp ? (r.v / r.imp * 100).toFixed(2) + '%' : '',
     r.units, r.v ? (r.units / r.v * 100).toFixed(2) + '%' : '', r.p.toFixed(2), r.flag ? FLAGS[r.flag].name : '']));
+
+// ---------------------------------------------------------------- bulk edit
+let EL = null, edTraffic = null, edRows = [], edJobTimer = null;
+const edState = { sort: null, limit: 200, render: () => drawEdit(), empty: 'Nothing to change for these listings.' };
+// Profit estimates from the last 90 days of sales: each account's eBay fee rate, each SKU's postage per unit
+function edRates() {
+  const from = addD(TODAY, -90), fee = {}, post = {}, gpost = {};
+  I.forEach(x => {
+    if (x.d < from) return;
+    const f = fee[x.a] ||= { s: 0, f: 0 }; f.s += x.s; f.f -= x.fee;
+    const p = post[x.sku] ||= { q: 0, c: 0 }; p.q += x.q; p.c -= x.po;
+    const g = gpost[x.g] ||= { q: 0, c: 0 }; g.q += x.q; g.c -= x.po;
+  });
+  const all = Object.values(fee).reduce((t, f) => ({ s: t.s + f.s, f: t.f + f.f }), { s: 0, f: 0 });
+  const dflt = all.s > 0 ? all.f / all.s : 0.13;
+  return {
+    fee: a => fee[a] && fee[a].s > 50 ? fee[a].f / fee[a].s : dflt,
+    post: (sku, g) => post[sku] && post[sku].q ? Math.max(0, post[sku].c / post[sku].q) : gpost[g] && gpost[g].q ? Math.max(0, gpost[g].c / gpost[g].q) : 0,
+  };
+}
+const COGSBY = () => Object.fromEntries(COGS.map(c => [c.sku, c]));
+function costAt(cmap, sku, price) {
+  const c = cmap[sku]; if (c && c.cost != null) return { c: c.cost, src: 'cost' };
+  const b = (D.settings.bands || []).slice().sort((x, y) => x[0] - y[0]).find(b => price < b[0]);
+  return b ? { c: b[1], src: 'band' } : null;
+}
+const to99up = p => Math.ceil(p + 0.01 - 1e-9) - 0.01, to99 = p => Math.max(0.99, Math.round(p + 0.01) - 0.01);
+const round2 = p => Math.round(p * 100) / 100;
+
+function edShowOpts() {
+  const fld = $('edField').value;
+  document.querySelectorAll('.ed-opt').forEach(o => o.hidden = o.dataset.for !== fld);
+  const how = $('edPriceHow').value;
+  $('edPriceValL').textContent = { profit: 'Minimum profit £', pct: 'Change by %', add: 'Change by £', set: 'New price £' }[how];
+  $('edAdWrap').hidden = how !== 'profit'; $('edRaiseWrap').hidden = how !== 'profit';
+  const th = $('edTitleHow').value; $('edFindWrap').hidden = th !== 'replace'; $('edReplL').textContent = th === 'replace' ? 'Replace with' : 'Text to add';
+  $('edHelp').textContent = {
+    price: how === 'profit' ? 'Works out the lowest price that leaves this profit after COGS, postage (your average label cost for the SKU), eBay fees (each account\'s own rate over the last 90 days) and ads.' : 'Changes the Buy It Now price.',
+    qty: 'Sets the quantity available. 0 keeps the listing but shows it as out of stock (if out-of-stock control is on in eBay).',
+    title: 'eBay titles can be up to 80 characters. Listings that would go over are left out.',
+    specific: 'Adds or changes one item specific. The listing\'s other specifics stay as they are. Several values: separate them with |.',
+  }[fld];
+}
+['edField', 'edPriceHow', 'edTitleHow'].forEach(id => $(id).addEventListener('change', () => { edShowOpts(); $('edPrevPanel').hidden = true; }));
+
+function edPicked() {
+  const f = F(), pre = $('edPrefix').value.trim().toLowerCase(), q = $('edSearch').value.trim().toLowerCase(), st = $('edStock').value, tf = $('edTraffic').value;
+  return EL.rows.map(r => ({ a: AIDX[r[0]], aid: r[0], id: r[1], sku: r[2], g: r[3], t: r[4], price: r[5], qty: r[6], sold: r[7], ad: r[8] }))
+    .filter(r => r.a !== undefined && f.a.has(r.a) && (f.allG || f.g.has(r.g)) &&
+      (!pre || r.sku.toLowerCase().startsWith(pre)) && (!q || r.t.toLowerCase().includes(q) || r.sku.toLowerCase().includes(q) || r.id.includes(q)) &&
+      (st === 'all' || (st === 'in' ? r.qty > 0 : r.qty === 0)) &&
+      (!tf || (() => { const fl = edTraffic && edTraffic.get(r.a + '|' + r.id); return tf === 'attn' ? ['noimp', 'lowctr', 'nosale'].includes(fl) : fl === tf; })()));
+}
+async function renderEdit() {
+  edShowOpts();
+  if (!EL) { $('edCount').textContent = 'Loading listings…'; try { EL = await api('/api/edit/listings'); } catch (e) { toast(e.message); return; } }
+  if ($('edTraffic').value && !edTraffic) {
+    $('edCount').textContent = 'Loading traffic…';
+    const r = [addD(TODAY, -30), addD(TODAY, -1)], f = F();
+    const td = await api(`/api/traffic?start=${r[0]}&end=${r[1]}`);
+    edTraffic = new Map(trafficRows(td, { ...f, r, allG: true }).map(x => [x.a + '|' + x.id, x.flag]));
+  }
+  const n = edPicked().length;
+  $('edCount').textContent = EL.connected.length ? `${n0(n)} listings match` : 'Connect an eBay account first (eBay page).';
+  renderEditJobs();
+}
+['edPrefix', 'edSearch'].forEach(id => $(id).addEventListener('input', () => { $('edPrevPanel').hidden = true; renderEdit(); }));
+['edStock', 'edTraffic'].forEach(id => $(id).addEventListener('change', () => { $('edPrevPanel').hidden = true; renderEdit(); }));
+
+$('edPreview').onclick = () => {
+  const picked = edPicked(), fld = $('edField').value;
+  if (!picked.length) return toast('No listings match. Change the filters in step 1.');
+  const R = edRates(), cmap = COGSBY(), out = [];
+  let same = 0;
+  const profitAt = (r, p) => { const c = costAt(cmap, r.sku, p); if (!c) return null; return p * (1 - R.fee(r.a) - (r.adr || 0)) - c.c - R.post(r.sku, r.g); };
+  for (const r of picked) {
+    let nv = null, note = '', ok = true, old = null;
+    if (fld === 'price') {
+      const how = $('edPriceHow').value, v = +$('edPriceVal').value || 0, cur = r.price || 0; old = cur;
+      r.adr = (how === 'profit' ? (+$('edAd').value || 0) : (r.ad != null ? r.ad : +$('edAd').value || 0)) / 100;
+      if (how === 'profit') {
+        const fr = R.fee(r.a), po = R.post(r.sku, r.g), k = 1 - fr - r.adr;
+        let c = costAt(cmap, r.sku, cur);
+        if (!c) { out.push({ ...r, cur, nv: null, ok: false, note: 'No cost for this SKU. Add it on the COGS page.' }); continue; }
+        let p = cur;
+        for (let i = 0; i < 4; i++) { c = costAt(cmap, r.sku, p) || c; p = (v + c.c + po) / k; }
+        p = $('ed99').checked ? to99up(p) : Math.ceil(p * 100) / 100;
+        if ($('edRaise').checked && p <= cur) { same++; continue; }
+        nv = p;
+        note = `Cost £${c.c.toFixed(2)}${c.src === 'band' ? ' (price band)' : ''} · postage £${po.toFixed(2)} · fees ${(fr * 100).toFixed(1)}% · ads ${(r.adr * 100).toFixed(1)}%`;
+      } else {
+        nv = how === 'set' ? v : how === 'pct' ? cur * (1 + v / 100) : cur + v;
+        nv = $('ed99').checked && how !== 'set' ? to99(nv) : round2(nv);
+      }
+      if (nv < 0.99) { nv = 0.99; note = 'Raised to eBay\'s minimum £0.99'; }
+      if (Math.abs(nv - cur) < 0.005) { same++; continue; }
+      const p0 = profitAt(r, cur), p1 = profitAt(r, nv);
+      if (p0 != null) note = `Profit about ${gbp(p0)} → ${gbp(p1)}` + (note ? ' · ' + note : '');
+    } else if (fld === 'qty') {
+      nv = Math.max(0, Math.round(+$('edQty').value || 0)); old = r.qty;
+      if (nv === r.qty) { same++; continue; }
+    } else if (fld === 'title') {
+      const how = $('edTitleHow').value, find = $('edFind').value, repl = $('edRepl').value; old = r.t;
+      if (how === 'replace') {
+        if (!find) return toast('Type the text to find.');
+        const rx = new RegExp(find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+        if (!rx.test(r.t)) { same++; continue; }
+        nv = r.t.replace(rx, repl);
+      } else {
+        if (!repl.trim()) return toast('Type the text to add.');
+        if (r.t.toLowerCase().includes(repl.trim().toLowerCase())) { same++; continue; }
+        nv = how === 'start' ? repl.trim() + ' ' + r.t : r.t + ' ' + repl.trim();
+      }
+      nv = nv.replace(/\s{2,}/g, ' ').trim();
+      if (nv === r.t) { same++; continue; }
+      if (nv.length > 80) { ok = false; note = `${nv.length} characters, over eBay's 80`; } else note = `${nv.length} characters`;
+    } else {
+      const name = $('edSpecName').value.trim(), val = $('edSpecVal').value.trim();
+      if (!name || !val) return toast('Type the item specific name and its value.');
+      nv = { name, value: val, mode: $('edSpecMode').value };
+      note = nv.mode === 'missing' ? 'Skipped when applying if the listing already has it' : 'Replaces any value it has now';
+    }
+    out.push({ ...r, cur: old, nv, ok, note });
+  }
+  edRows = out.sort((x, y) => y.ok - x.ok); edState.limit = 200;
+  const blocked = out.filter(r => !r.ok).length;
+  $('edPrevPanel').hidden = false;
+  const lbl = { price: 'price', qty: 'quantity', title: 'title', specific: 'item specific' }[fld];
+  $('edPrevSub').textContent = `${n0(out.length)} listings get a new ${lbl}` + (same ? ` · ${n0(same)} already right, left as they are` : '') + (blocked ? ` · ${n0(blocked)} can't be changed (see notes)` : '') + '. Untick any you want to leave.';
+  drawEdit(); $('edPrevPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+function edFmt(fld, v) { return v == null ? '–' : fld === 'price' ? gbp(v) : fld === 'qty' ? n0(v) : fld === 'specific' ? `${esc(v.name)}: <b>${esc(v.value)}</b>` : esc(v); }
+function drawEdit() {
+  const fld = $('edField').value;
+  const cols = [
+    { h: `<input type="checkbox" id="edAll" aria-label="Select all" checked>`, l: 1, v: () => 0, f: r => `<input type="checkbox" class="ed-sel" data-k="${r.aid}|${esc(r.id)}" ${r.ok ? 'checked' : 'disabled'} aria-label="Select ${esc(r.sku || r.id)}">` },
+    { h: 'Listing', l: 1, cl: 'prod', v: r => r.sku, f: r => `<span class="t">${esc(r.t)}</span><span class="s"><span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)} · ${esc(r.sku || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(r.id)}" target="_blank" rel="noopener">${esc(r.id)}</a></span>` },
+    ...(fld === 'title' ? [{ h: 'New title', l: 1, cl: 'prod', v: r => r.nv || '', f: r => `<span class="oldv">${esc(r.cur)}</span><span class="t">${esc(r.nv)}</span>` }]
+      : [{ h: 'Now', v: r => r.cur ?? 0, f: r => fld === 'specific' ? '<span class="muted">read when applied</span>' : edFmt(fld, r.cur) },
+         { h: 'New', v: r => typeof r.nv === 'number' ? r.nv : 0, f: r => `<b>${edFmt(fld, r.nv)}</b>` }]),
+    { h: 'Notes', l: 1, cl: 'prod', v: r => r.note, f: r => `<span class="${r.ok ? 'muted' : 'neg'}">${esc(r.note)}</span>` }];
+  table($('edTable'), cols, edRows, null, edState);
+  $('edMore').hidden = edRows.length <= edState.limit;
+  const all = $('edAll'); if (all) { all.onclick = e => e.stopPropagation(); all.onchange = () => { document.querySelectorAll('.ed-sel:not([disabled])').forEach(b => b.checked = all.checked); edSel(); }; }
+  document.querySelectorAll('.ed-sel').forEach(b => b.onchange = edSel); edSel();
+}
+function edChosen() {
+  const on = new Set([...document.querySelectorAll('.ed-sel:checked')].map(b => b.dataset.k));
+  // rows beyond "Show more" aren't drawn yet: they count as ticked unless they can't be applied
+  const drawn = new Set([...document.querySelectorAll('.ed-sel')].map(b => b.dataset.k));
+  return edRows.filter(r => r.ok && (on.has(r.aid + '|' + r.id) || !drawn.has(r.aid + '|' + r.id)));
+}
+function edSel() { $('edSel').textContent = `${n0(edChosen().length)} selected`; }
+$('edMore').onclick = () => { edState.limit += 500; drawEdit(); };
+$('edCsv').onclick = () => csv('bulk-edit-preview.csv', ['Account', 'Item number', 'SKU', 'Title', 'Now', 'New', 'Notes'],
+  edRows.map(r => [ACC[r.a].name, r.id, r.sku, r.t, typeof r.cur === 'object' ? '' : r.cur, typeof r.nv === 'object' && r.nv ? `${r.nv.name}: ${r.nv.value}` : r.nv, r.note]));
+$('edApply').onclick = async () => {
+  const b = $('edApply'), ch = edChosen(), fld = $('edField').value;
+  if (!ch.length) return toast('Select at least one listing.');
+  if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = `Click again to change ${n0(ch.length)} live listings`; setTimeout(() => { b.dataset.sure = ''; b.textContent = 'Apply to eBay'; }, 6000); return; }
+  b.dataset.sure = ''; b.textContent = 'Apply to eBay';
+  const summary = fld === 'price' ? { profit: `Price: profit at least £${$('edPriceVal').value} after ${$('edAd').value}% ads`, pct: `Price ${$('edPriceVal').value}%`, add: `Price ${$('edPriceVal').value >= 0 ? '+' : ''}£${$('edPriceVal').value}`, set: `Price set to £${$('edPriceVal').value}` }[$('edPriceHow').value]
+    : fld === 'qty' ? `Quantity set to ${$('edQty').value}` : fld === 'title' ? `Title: ${$('edTitleHow').selectedOptions[0].text.toLowerCase()} "${$('edTitleHow').value === 'replace' ? $('edFind').value + '" → "' + $('edRepl').value : $('edRepl').value}"`
+    : `${$('edSpecName').value} = ${$('edSpecVal').value} (${$('edSpecMode').value === 'missing' ? 'where missing' : 'all'})`;
+  try {
+    const r = await post('/api/edit/jobs', { summary, changes: ch.map(x => ({ account_id: x.aid, item_id: x.id, sku: x.sku, title: x.t, field: fld, old: x.cur, new: x.nv })) });
+    toast('Sending changes to eBay…'); $('edPrevPanel').hidden = true; EL = null; showEditJob(r.job);
+  } catch (e) { toast(e.message); }
+};
+async function renderEditJobs() {
+  const jobs = await api('/api/edit/jobs');
+  $('edJobs').innerHTML = jobs.length ? `<thead><tr><th class="l">#</th><th class="l">When</th><th class="l">Change</th><th>Listings</th><th>Changed</th><th>Skipped</th><th>Failed</th><th class="l">Status</th><th></th></tr></thead><tbody>${jobs.slice(0, 15).map(j => `<tr>
+    <td class="l">${j.id}</td><td class="l">${esc(j.created_at.slice(0, 16))}</td><td class="l prod">${esc(j.summary)}<span class="s">${esc(j.created_by || '')}</span></td>
+    <td>${j.total}</td><td>${j.ok}</td><td>${j.skipped}</td><td>${j.failed}</td>
+    <td class="l">${j.status === 'running' || j.status === 'queued' ? `<span class="chip b">Working ${j.done}/${j.total}</span>` : j.undone_by ? `<span class="chip ret">Undone by #${j.undone_by}</span>` : `<span class="chip k">${esc(j.status)}</span>`}</td>
+    <td><button class="link" type="button" data-edshow="${j.id}">Details</button>${j.status === 'finished' && j.ok && !j.undone_by ? ` <button class="link danger" type="button" data-edundo="${j.id}">Undo</button>` : ''}</td></tr>`).join('')}</tbody>`
+    : '<tbody><tr><td class="empty">No bulk edits yet.</td></tr></tbody>';
+  document.querySelectorAll('[data-edshow]').forEach(b => b.onclick = () => showEditJob(+b.dataset.edshow));
+  document.querySelectorAll('[data-edundo]').forEach(b => b.onclick = async () => {
+    if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = 'Click again to undo'; return; }
+    try { const r = await api(`/api/edit/jobs/${b.dataset.edundo}/undo`, { method: 'POST' }); toast('Putting the old values back…'); EL = null; showEditJob(r.job); } catch (e) { toast(e.message); }
+  });
+}
+async function showEditJob(id) {
+  clearTimeout(edJobTimer);
+  const { job, items } = await api('/api/edit/jobs/' + id), run = job.status === 'running' || job.status === 'queued';
+  const fmt = (f, v) => { try { v = JSON.parse(v); } catch (e) { } return f === 'specific' ? (v && v.name ? `${esc(v.name)}: ${esc(v.value ?? (v.restore ? v.restore.join(', ') : 'not set'))}` : Array.isArray(v) ? esc(v.join(', ')) : '–') : edFmt(f, v); };
+  $('edJob').innerHTML = `<div class="panel-head"><div><h2>#${job.id}: ${esc(job.summary)}</h2><p>${job.done} of ${job.total} done · ${job.ok} changed · ${job.skipped} skipped · ${job.failed} failed · ${run ? 'working…' : esc(job.status)}</p></div></div>
+    <div class="tbl-wrap"><table><thead><tr><th class="l">Account</th><th class="l">Listing</th><th class="l">Before</th><th class="l">After</th><th class="l">Result</th></tr></thead><tbody>${items.map(i => `<tr>
+      <td class="l">${esc(i.account)}</td><td class="l prod"><span class="t">${esc(i.title || '')}</span><span class="s">${esc(i.sku || '')} · <a href="https://www.ebay.co.uk/itm/${esc(i.item_id)}" target="_blank" rel="noopener">${esc(i.item_id)}</a></span></td>
+      <td class="l prod">${fmt(i.field, i.old_value)}</td><td class="l prod">${fmt(i.field, i.new_value)}</td>
+      <td class="l prod">${i.status === 'ok' ? '<span class="chip k">Done</span> ' : i.status === 'failed' ? '<span class="chip m">Failed</span> ' : i.status === 'skipped' ? '<span class="chip ret">Skipped</span> ' : '<span class="chip b">Waiting</span> '}${esc(i.message || '')}</td></tr>`).join('')}</tbody></table></div>`;
+  if (run) edJobTimer = setTimeout(() => showEditJob(id), 2500); else renderEditJobs();
+}
 
 // ---------------------------------------------------------------- eBay
 let EBS = null, cpRows = [], jobTimer = null;
@@ -547,7 +744,7 @@ $('adFile').onchange = async e => {
 };
 
 // ---------------------------------------------------------------- wiring
-const titles = { dash: 'Dashboard', orders: 'Sold items', traffic: 'Traffic', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
+const titles = { dash: 'Dashboard', orders: 'Sold items', traffic: 'Traffic', edit: 'Bulk edit', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
 let page = 'dash';
 function show(p) {
   page = p; document.querySelectorAll('[data-p]').forEach(s => s.hidden = s.id !== 'p-' + p);
@@ -563,6 +760,7 @@ function renderAll() {
   if (page === 'dash') { renderTileMenu(); renderTiles(); renderProducts(); }
   if (page === 'orders') renderOrders();
   if (page === 'traffic') renderTraffic();
+  if (page === 'edit') renderEdit();
   if (page === 'cogs') { renderBands(); renderCogs(); }
   if (page === 'charts') renderCharts();
   if (page === 'uploads') renderUploads();

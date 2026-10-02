@@ -15,6 +15,7 @@ from . import db as DB
 from . import importers as IM
 from . import profit as PR
 from . import ebay as EB
+from . import edits as ED
 from .auth import check_pw, ensure_admin, hash_pw
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -31,6 +32,8 @@ def startup():
     with DB.db() as con:
         con.executescript(EB.SCHEMA)
         EB.migrate(con)
+        con.executescript(ED.SCHEMA)
+        con.execute("UPDATE edit_jobs SET status='stopped' WHERE status IN ('queued','running')")
         con.execute("UPDATE ebay_jobs SET status='stopped' WHERE status IN ('queued','running')")
         ensure_admin(con)
     if os.environ.get("DISABLE_SYNC") != "1":
@@ -398,6 +401,89 @@ def traffic(request: Request, start: str, end: str):
             out.append([key[0], key[1], sku, PR.group_of(sku), (l["title"] if l else "") or "", l["price"] if l else None,
                         l["qty"] if l else None, 1 if key in listing else 0, *rows.get(key, [0, 0, 0, 0, 0])])
     return {"rows": out, "coverage": cover}
+
+
+# ------------------------------------------------------------------ bulk edits
+@app.get("/api/edit/listings")
+def edit_listings(request: Request):
+    """Active listings on every connected account, with SKU and product group."""
+    need_user(request)
+    with DB.db() as con:
+        sku_map = {r["item_id"]: r["sku"] for r in con.execute("SELECT item_id,sku FROM sku_map")}
+        connected = {r[0] for r in con.execute("SELECT account_id FROM ebay_tokens")}
+        ads = {(r["account_id"], r["item_id"]): r["rate"] for r in con.execute("SELECT account_id,item_id,rate FROM ad_rates")}
+        out = []
+        for a in sorted(connected):
+            active = set(EB.active_listing_ids(con, a))
+            for r in con.execute("SELECT item_id,sku,title,price,qty,sold FROM listings WHERE account_id=?", (a,)):
+                if r["item_id"] not in active:
+                    continue
+                sku = sku_map.get(r["item_id"]) or r["sku"] or ""
+                out.append([a, r["item_id"], sku, PR.group_of(sku), r["title"] or "", r["price"], r["qty"], r["sold"] or 0,
+                            ads.get((a, r["item_id"]))])
+    return {"rows": out, "connected": sorted(connected)}
+
+
+@app.post("/api/edit/jobs")
+async def edit_new_job(request: Request):
+    u = need_user(request)
+    b = await request.json()
+    changes = b.get("changes") or []
+    if not changes:
+        raise HTTPException(400, "Nothing to change.")
+    if len(changes) > 2000:
+        raise HTTPException(400, "Up to 2,000 listings at a time, please.")
+    for c in changes:
+        if c.get("field") not in ED.FIELDS or not c.get("item_id") or c.get("new") in (None, ""):
+            raise HTTPException(400, "One of the changes is incomplete.")
+        if c["field"] == "price" and not (0.99 <= float(c["new"]) <= 99999):
+            raise HTTPException(400, f"Price for {c['item_id']} must be between £0.99 and £99,999.")
+        if c["field"] == "qty" and not (0 <= int(c["new"]) <= 99999):
+            raise HTTPException(400, "Quantity must be between 0 and 99,999.")
+    with DB.db() as con:
+        for a in {int(c["account_id"]) for c in changes}:
+            EB.access_token(con, a)  # fails early if an account isn't connected
+        jid = ED.create_job(con, u["email"], changes[0]["field"], str(b.get("summary") or "")[:300], changes)
+    ED.start(DB.db, jid)
+    return {"job": jid}
+
+
+@app.get("/api/edit/jobs")
+def edit_jobs(request: Request):
+    need_user(request)
+    with DB.db() as con:
+        return [dict(r) for r in con.execute("SELECT * FROM edit_jobs ORDER BY id DESC LIMIT 30")]
+
+
+@app.get("/api/edit/jobs/{job_id}")
+def edit_job(job_id: int, request: Request):
+    need_user(request)
+    with DB.db() as con:
+        j = con.execute("SELECT * FROM edit_jobs WHERE id=?", (job_id,)).fetchone()
+        if not j:
+            raise HTTPException(404, "Job not found.")
+        return {"job": dict(j), "items": [dict(r) for r in con.execute(
+            "SELECT e.*, a.name AS account FROM edit_items e JOIN accounts a ON a.id=e.account_id WHERE job_id=? ORDER BY e.id", (job_id,))]}
+
+
+@app.post("/api/edit/jobs/{job_id}/undo")
+def edit_undo(job_id: int, request: Request):
+    u = need_user(request)
+    with DB.db() as con:
+        j = con.execute("SELECT * FROM edit_jobs WHERE id=?", (job_id,)).fetchone()
+        if not j:
+            raise HTTPException(404, "Job not found.")
+        if j["status"] in ("queued", "running"):
+            raise HTTPException(400, "Wait for this job to finish first.")
+        if j["undone_by"]:
+            raise HTTPException(400, f"Already undone (job #{j['undone_by']}).")
+        ch = ED.undo_changes(con, job_id)
+        if not ch:
+            raise HTTPException(400, "Nothing in this job went through, so there's nothing to undo.")
+        jid = ED.create_job(con, u["email"], j["kind"], f"Undo #{job_id}: {j['summary']}"[:300], ch, undo_of=job_id)
+        con.execute("UPDATE edit_jobs SET undone_by=? WHERE id=?", (jid, job_id))
+    ED.start(DB.db, jid)
+    return {"job": jid}
 
 
 @app.get("/ebay/connect/{account_id}")

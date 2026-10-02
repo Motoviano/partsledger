@@ -17,6 +17,7 @@
       <button data-page="dash"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="8" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="15" width="7" height="6" rx="1"/></svg><span>Dashboard</span></button>
       <button data-page="orders"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Sold items</span></button>
       <button data-page="traffic"><svg viewBox="0 0 24 24"><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span>Traffic</span></button>
+      <button data-page="edit"><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg><span>Bulk edit</span></button>
       <button data-page="cogs"><svg viewBox="0 0 24 24"><path d="M20 12l-8 8-9-9V3h8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg><span>COGS</span></button>
       <button data-page="charts"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span>Charts</span></button>
       <button data-page="uploads"><svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg><span>Uploads</span></button>
@@ -79,6 +80,59 @@
           <div style="display:flex;gap:8px;flex-wrap:wrap"><input type="search" id="trSearch" placeholder="Search SKU, product or item number" aria-label="Search listings"><button class="btn" type="button" id="trCsv">Export CSV</button></div></div>
         <div class="tbl-wrap"><table id="trTable"></table></div>
         <div class="more"><button class="btn" id="trMore" type="button">Show more</button></div>
+      </div>
+    </section>
+
+    <section id="p-edit" data-p hidden>
+      <div class="panel">
+        <div class="panel-head"><div><h2>1. Choose listings</h2><p>Active listings on connected accounts. The account and product group filters above apply too.</p></div></div>
+        <div class="form-row">
+          <div class="f"><label for="edPrefix">SKU starts with</label><input type="text" id="edPrefix" style="width:120px" placeholder="e.g. GRLL"></div>
+          <div class="f"><label for="edSearch">Title or SKU contains</label><input type="text" id="edSearch" style="width:200px" placeholder="e.g. Transit"></div>
+          <div class="f"><label for="edStock">Stock</label><select id="edStock"><option value="in">In stock</option><option value="all">All</option><option value="out">Out of stock</option></select></div>
+          <div class="f"><label for="edTraffic">Traffic (last 30 days)</label><select id="edTraffic"><option value="">Any</option><option value="attn">Needs attention</option><option value="noimp">No impressions</option><option value="lowctr">Seen, rarely clicked</option><option value="nosale">Views, no sales</option><option value="sell">Selling</option></select></div>
+          <span class="muted" id="edCount" style="padding-bottom:9px"></span>
+        </div>
+      </div>
+      <div class="panel" style="margin-top:14px">
+        <div class="panel-head"><div><h2>2. Choose the change</h2><p id="edHelp"></p></div></div>
+        <div class="form-row">
+          <div class="f"><label for="edField">Change</label><select id="edField"><option value="price">Price</option><option value="qty">Quantity</option><option value="title">Title</option><option value="specific">Item specific</option></select></div>
+          <div class="ed-opt" data-for="price">
+            <div class="f"><label for="edPriceHow">How</label><select id="edPriceHow"><option value="profit">Profit at least £… after ads</option><option value="pct">Change by %</option><option value="add">Change by £</option><option value="set">Set to £</option></select></div>
+            <div class="f"><label for="edPriceVal" id="edPriceValL">Minimum profit £</label><input type="number" id="edPriceVal" value="1" step="0.5" style="width:90px"></div>
+            <div class="f" id="edAdWrap"><label for="edAd">Ad rate %</label><input type="number" id="edAd" value="10" step="0.5" min="0" max="50" style="width:80px"></div>
+            <label class="chk" id="edRaiseWrap"><input type="checkbox" id="edRaise" checked> Only raise prices</label>
+            <label class="chk"><input type="checkbox" id="ed99" checked> End in .99</label>
+          </div>
+          <div class="ed-opt" data-for="qty">
+            <div class="f"><label for="edQty">Set quantity to</label><input type="number" id="edQty" value="5" min="0" step="1" style="width:90px"></div>
+          </div>
+          <div class="ed-opt" data-for="title">
+            <div class="f"><label for="edTitleHow">How</label><select id="edTitleHow"><option value="replace">Replace text</option><option value="start">Add to start</option><option value="end">Add to end</option></select></div>
+            <div class="f" id="edFindWrap"><label for="edFind">Find</label><input type="text" id="edFind" style="width:180px"></div>
+            <div class="f"><label for="edRepl" id="edReplL">Replace with</label><input type="text" id="edRepl" style="width:180px"></div>
+          </div>
+          <div class="ed-opt" data-for="specific">
+            <div class="f"><label for="edSpecName">Item specific</label><input type="text" id="edSpecName" list="edSpecList" style="width:210px" placeholder="e.g. Brand"><datalist id="edSpecList">
+              <option value="Brand"><option value="Manufacturer Part Number"><option value="Reference OE/OEM Number"><option value="Placement on Vehicle"><option value="Colour"><option value="Material"><option value="Fitting Notes"><option value="Type"><option value="Features"><option value="Country/Region of Manufacture"><option value="Warranty"><option value="Unit Quantity">
+            </datalist></div>
+            <div class="f"><label for="edSpecVal">Value</label><input type="text" id="edSpecVal" style="width:210px" placeholder="Use | between several values"></div>
+            <div class="f"><label for="edSpecMode">Where</label><select id="edSpecMode"><option value="missing">Only where it's missing</option><option value="all">Set on every listing</option></select></div>
+          </div>
+          <button class="btn primary" type="button" id="edPreview">Preview changes</button>
+        </div>
+      </div>
+      <div class="panel" style="margin-top:14px" id="edPrevPanel" hidden>
+        <div class="panel-head"><div><h2>3. Check and apply</h2><p id="edPrevSub"></p></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><span class="muted" id="edSel"></span><button class="btn" type="button" id="edCsv">Export CSV</button><button class="btn primary" type="button" id="edApply">Apply to eBay</button></div></div>
+        <div class="tbl-wrap"><table id="edTable"></table></div>
+        <div class="more"><button class="btn" id="edMore" type="button">Show more</button></div>
+      </div>
+      <div class="panel" style="margin-top:14px">
+        <div class="panel-head"><div><h2>Recent edits</h2><p>Every change keeps the old value. Undo puts back everything a job changed.</p></div></div>
+        <div class="tbl-wrap"><table id="edJobs"></table></div>
+        <div id="edJob"></div>
       </div>
     </section>
 
