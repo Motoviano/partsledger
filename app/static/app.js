@@ -917,6 +917,134 @@ $('msSearch').addEventListener('input', drawThreads);
 $('msCheck').onclick = async () => { try { await api('/api/messages/check', { method: 'POST' }); toast('Checking eBay for new messages…'); setTimeout(() => renderMsgs(true), 8000); } catch (e) { toast(e.message); } };
 setInterval(() => { if (page === 'msgs' && MSG && !document.hidden && !($('msText') && document.activeElement === $('msText'))) renderMsgs(true); }, 120000);
 
+// ---------------------------------------------------------------- Promoted Listings performance
+let ADS = null, adFlag = 'sugg', adOff = new Set(), adOn = new Set(), adRateTyped = new Map(), adRowsCache = [];
+const adState = { sort: null, limit: 150, render: () => drawAds(), empty: 'No listings match.' };
+const AD_ACT = {
+  stop: { name: 'Stop', chip: 'm' }, lower: { name: 'Lower', chip: 'ret' }, raise: { name: 'Raise', chip: 'b' },
+  start: { name: 'Start', chip: 'b' }, keep: { name: 'Keep', chip: 'k' }, none: { name: 'No change', chip: '' },
+};
+async function renderAds2() {
+  try {
+    const w = $('adWin').value;
+    [ADS] = await Promise.all([api('/api/ads?window=' + w), EL ? null : api('/api/edit/listings').then(r => { EL = r; })]);
+  } catch (e) { toast(e.message); return; }
+  const st = ADS.state;
+  $('adStatus').innerHTML = st.length ? st.map(a => `${esc(a.name)}: ${a.fetched_at ? (a.status === 'error' ? '<span class="neg">' + esc(a.message) + '</span>' : `updated ${ago(a.fetched_at)} · ${esc(a.message || '')}`) : 'first report within the hour'}`).join('<br>')
+    + '<br><span class="muted">Ad fees and ad sales come from your eBay payments (each Promoted Listings fee is tied to its sale); impressions and clicks come from eBay\'s daily ad report.</span>' : 'Connect your eBay accounts on the eBay page first.';
+  drawAds(); drawAdLog();
+}
+function adRows() {
+  const f = F(), w = +$('adWin').value, from = addD(TODAY, -w), pf = edProfitFn();
+  const minP = +$('adMinP').value || 0, lo = +$('adLo').value || 2, hi = +$('adHi').value || 15, step = +$('adStep').value || 2, startAt = +$('adStart').value || 5;
+  const cur = new Map(), perf = new Map(), own = new Map();
+  ADS.current.forEach(c => { if (c[4] === 'COST_PER_SALE') cur.set(c[0] + '|' + c[1], { cid: c[2], cname: c[3], rate: c[5], status: c[6] }); });
+  ADS.perf.forEach(p => perf.set(p[0] + '|' + p[1], { imp: p[2], clicks: p[3], units: p[4], sales: p[5], fees: p[6] }));
+  I.forEach(x => { if (x.d < from || !x.id) return; const k = ACC[x.a].id + '|' + x.id, o = own.get(k) || { u: 0, adU: 0, adS: 0, adF: 0 };
+    o.u += x.q; if (x.ad < 0) { o.adU += x.q; o.adS += x.s; o.adF -= x.ad; } own.set(k, o); });
+  const r1 = v => Math.floor(v * 10) / 10;
+  return EL.rows.map(r => {
+    const L = { a: AIDX[r[0]], aid: r[0], id: r[1], sku: r[2], g: r[3], t: r[4], price: r[5] || 0, qty: r[6] };
+    const k = L.aid + '|' + L.id, c = cur.get(k), p = perf.get(k), o = own.get(k) || { u: 0, adU: 0, adS: 0, adF: 0 };
+    const cost = costAt(pf.cmap, L.sku, L.price), fr = pf.R.fee(L.a), post = pf.R.post(L.sku, L.g);
+    const base = cost ? L.price * (1 - fr) - cost.c - post : null;      // profit per sale before ads
+    const maxRate = base != null && L.price ? r1((base - minP) / L.price * 100) : null;
+    const rate = c ? c.rate : null;
+    const adU = o.adU || (p ? p.units : 0), adF = o.adF || (p ? p.fees : 0), adS = o.adS || (p ? p.sales : 0);
+    const profitNow = base != null ? base - L.price * (rate || 0) / 100 : null;
+    let act = 'none', nr = null, why = '';
+    if (L.qty === 0) { act = 'none'; why = 'Out of stock'; }
+    else if (!cost) { act = 'none'; why = 'No cost for this SKU, so no safe rate can be worked out'; }
+    else if (rate != null) {
+      if (maxRate < lo) { act = 'stop'; why = `Even at ${lo}% an ad sale leaves less than ${gbp(minP)} (${gbp(base - L.price * lo / 100)})`; }
+      else if (rate > maxRate + 0.05) { act = 'lower'; nr = Math.max(lo, Math.min(hi, maxRate)); why = `At ${rate}% an ad sale leaves ${gbp(profitNow)}; ${nr}% keeps ${gbp(minP)}+`; }
+      else if (adU === 0 && p && p.imp < 200 && rate + 0.05 < Math.min(maxRate, hi)) { act = 'raise'; nr = r1(Math.min(rate + step, maxRate, hi)); why = `Hardly shown in ads (${n0(p.imp)} impressions); ${nr}% still leaves ${gbp(base - L.price * nr / 100)}`; }
+      else if (adU === 0 && p && p.clicks >= 30) { act = 'keep'; why = `${n0(p.clicks)} ad clicks but no sale: check price, photos or fitment`; }
+      else { act = 'keep'; why = adU ? `${n0(adU)} ad sales, each leaving about ${gbp(profitNow)}` : 'No ad sales yet; an ad costs nothing until it sells'; }
+    } else if (maxRate >= lo) { act = 'start'; nr = r1(Math.max(lo, Math.min(startAt, maxRate, hi))); why = `Not promoted. ${nr}% still leaves ${gbp(base - L.price * nr / 100)} per sale`; }
+    else { act = 'none'; why = `Not promoted. Margin too thin: below ${lo}% would be needed`; }
+    const typed = adRateTyped.get(k);
+    return { ...L, k, c, p, o, rate, maxRate, base, profitNow, adU, adF, adS, act, nr: typed != null ? typed : nr, why, cost };
+  }).filter(r => r.a !== undefined && f.a.has(r.a) && (f.allG || f.g.has(r.g)));
+}
+function drawAds() {
+  if (!ADS || !EL) return;
+  const all = adRows(), q = $('adSearch').value.trim().toLowerCase();
+  adRowsCache = all;
+  const cnt = {}; all.forEach(r => cnt[r.act] = (cnt[r.act] || 0) + 1);
+  const sugg = (cnt.stop || 0) + (cnt.lower || 0) + (cnt.raise || 0) + (cnt.start || 0);
+  const T = all.reduce((t, r) => { t.fees += r.adF; t.adS += r.adS; t.adU += r.adU; t.u += r.o.u; t.imp += r.p ? r.p.imp : 0; t.cl += r.p ? r.p.clicks : 0; t.prom += r.rate != null ? 1 : 0; return t; }, { fees: 0, adS: 0, adU: 0, u: 0, imp: 0, cl: 0, prom: 0 });
+  const stat = (k, v, sub) => `<div class="stat"><small>${k}</small><b>${v}</b>${sub ? `<span>${sub}</span>` : ''}</div>`;
+  $('adStats').innerHTML = stat('Ad fees', gbp(T.fees), `last ${$('adWin').value} days`) + stat('Ad sales', gbp(T.adS), `${n0(T.adU)} units`) +
+    stat('Return on ads', T.fees ? (T.adS / T.fees).toFixed(1) + '×' : '–', 'ad sales ÷ ad fees') + stat('Sold through ads', pct(T.u ? T.adU / T.u : NaN), `of ${n0(T.u)} units sold`) +
+    stat('Ad clicks', n0(T.cl), `${n0(T.imp)} ad impressions`) + stat('Promoted', n0(T.prom), `${n0(sugg)} suggestions`);
+  const fb = [['sugg', 'Suggested changes', sugg], ['all', 'All listings', all.length], ...['stop', 'lower', 'raise', 'start', 'keep'].map(k => [k, AD_ACT[k].name, cnt[k] || 0])];
+  $('adFlags').innerHTML = fb.map(([k, n, c]) => `<button type="button" data-af="${k}" aria-pressed="${adFlag === k}">${n} <em>${n0(c)}</em></button>`).join('');
+  $('adFlags').querySelectorAll('[data-af]').forEach(b => b.onclick = () => { adFlag = b.dataset.af; adState.limit = 150; drawAds(); });
+  const rows = all.filter(r => (adFlag === 'all' || (adFlag === 'sugg' ? ['stop', 'lower', 'raise', 'start'].includes(r.act) : r.act === adFlag)) &&
+    (!q || r.sku.toLowerCase().includes(q) || r.t.toLowerCase().includes(q) || r.id.includes(q)));
+  $('adSub').textContent = `${n0(rows.length)} listings. Rates are worked out so each ad sale still leaves at least ${gbp(+$('adMinP').value || 0)} after COGS, postage, eBay fees and the ad fee.`;
+  const canAct = r => ['stop', 'lower', 'raise', 'start'].includes(r.act) || adRateTyped.has(r.k);
+  const cols = [
+    { h: '', l: 1, v: r => adOff.has(r.k) ? 1 : 0, f: r => canAct(r) ? `<input type="checkbox" class="ad-sel" data-k="${esc(r.k)}" ${adTicked(r) ? 'checked' : ''} aria-label="Tick ${esc(r.sku || r.id)}">` : '' },
+    { h: 'Listing', l: 1, cl: 'prod', v: r => r.t, f: r => `<span class="t">${esc(r.t)}</span><span class="s"><span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)} · ${esc(r.sku || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(r.id)}" target="_blank" rel="noopener">${esc(r.id)}</a></span>` },
+    { h: 'Price', v: r => r.price, f: r => gbp(r.price) + `<span class="sub">stock ${r.qty ?? '–'}</span>` },
+    { h: 'Rate now', v: r => r.rate ?? -1, f: r => r.rate != null ? `${r.rate}%<span class="sub">${esc((r.c.cname || '').slice(0, 22))}</span>` : '<span class="muted">not promoted</span>' },
+    { h: 'Ad clicks', v: r => r.p ? r.p.clicks : -1, f: r => r.p ? `${n0(r.p.clicks)}<span class="sub">${n0(r.p.imp)} impr.</span>` : '–' },
+    { h: 'Ad sales', v: r => r.adU, f: r => `${n0(r.adU)}<span class="sub">${r.adU ? gbp(r.adS) + ' · ' : ''}of ${n0(r.o.u)} sold</span>` },
+    { h: 'Ad fees', v: r => r.adF, f: r => r.adF ? money(-r.adF) + (r.adS ? `<span class="sub">${(r.adF / r.adS * 100).toFixed(1)}% of ad sales</span>` : '') : '–' },
+    { h: 'Profit / ad sale', v: r => r.profitNow ?? -1e9, f: r => (r.profitNow != null && r.rate != null ? `<b>${money(r.profitNow)}</b>` : r.base != null ? `<span class="muted">${gbp(r.base)} before ads</span>` : '–') +
+        (r.maxRate != null ? `<span class="sub">safe up to ${r.maxRate > 0 ? r.maxRate + '%' : 'no rate'}</span>` : '') },
+    { h: 'Suggestion', l: 1, cl: 'prod', v: r => r.act, f: r => `${r.act !== 'none' ? `<span class="chip ${AD_ACT[r.act].chip}">${AD_ACT[r.act].name}${r.nr != null && r.act !== 'stop' ? ' → ' + r.nr + '%' : ''}</span>` : ''}<span class="next">${esc(r.why)}</span>` },
+    { h: 'New rate %', v: r => r.nr ?? -1, f: r => r.act === 'stop' && !adRateTyped.has(r.k) ? '<span class="neg">stop</span>' : `<input type="number" class="cell-in ${adRateTyped.has(r.k) ? 'changed' : ''}" style="width:72px" data-k="${esc(r.k)}" step="0.1" min="1" max="100" value="${r.nr ?? r.rate ?? ''}" placeholder="–" aria-label="New ad rate for ${esc(r.sku || r.id)}">` }];
+  table($('adTable'), cols, rows, null, adState);
+  $('adMore').hidden = rows.length <= adState.limit;
+  $('adTable').querySelectorAll('.ad-sel').forEach(b => b.onchange = () => { adSetTick(b.dataset.k, b.checked); adSelCount(); });
+  adShown = rows;
+  $('adTable').querySelectorAll('.cell-in').forEach(inp => inp.addEventListener('change', () => {
+    const v = inp.value === '' ? null : Math.round(+inp.value * 10) / 10;
+    if (v == null) adRateTyped.delete(inp.dataset.k); else adRateTyped.set(inp.dataset.k, v);
+    drawAds();
+  }));
+  adSelCount();
+}
+let adShown = [];
+// "Start" (new ads) is opt-in; every other suggestion starts ticked
+const adTicked = r => (r.act === 'start' && !adRateTyped.has(r.k)) ? adOn.has(r.k) : !adOff.has(r.k);
+function adSetTick(k, on) { if (on) { adOn.add(k); adOff.delete(k); } else { adOn.delete(k); adOff.add(k); } }
+function adChosen() {
+  return adRowsCache.filter(r => adTicked(r) && (['stop', 'lower', 'raise', 'start'].includes(r.act) || adRateTyped.has(r.k)))
+    .filter(r => adRateTyped.has(r.k) ? r.nr !== r.rate : true);
+}
+function adSelCount() { $('adSel').textContent = `${n0(adChosen().length)} ticked`; }
+function drawAdLog() {
+  $('adLog').innerHTML = ADS.changes.length ? `<thead><tr><th class="l">When (UTC)</th><th class="l">Account</th><th class="l">Listing</th><th>Before</th><th>After</th><th class="l">Result</th></tr></thead><tbody>${ADS.changes.map(c => `<tr>
+    <td class="l">${esc((c.at || '').slice(0, 16))}</td><td class="l">${esc(c.account || '')}</td><td class="l"><span class="sku">${esc(c.sku || '')}</span> <a href="https://www.ebay.co.uk/itm/${esc(c.item_id)}" target="_blank" rel="noopener">${esc(c.item_id)}</a></td>
+    <td>${c.old_rate != null ? c.old_rate + '%' : '–'}</td><td>${c.action === 'stop' ? 'stopped' : c.new_rate + '%'}</td>
+    <td class="l prod">${c.status === 'done' ? '<span class="chip k">Done</span> ' : c.status === 'failed' ? '<span class="chip m">Failed</span> ' : '<span class="chip b">Waiting</span> '}${esc(c.message || '')}</td></tr>`).join('')}</tbody>` : '<tbody><tr><td class="empty">No ad changes sent yet.</td></tr></tbody>';
+  if (ADS.changes.some(c => c.status === 'waiting')) setTimeout(async () => { if (page === 'ads') { ADS = await api('/api/ads?window=' + $('adWin').value); drawAds(); drawAdLog(); } }, 3000);
+}
+['adMinP', 'adLo', 'adHi', 'adStep', 'adStart'].forEach(id => $(id).addEventListener('change', () => drawAds()));
+$('adWin').addEventListener('change', renderAds2);
+$('adSearch').addEventListener('input', () => { adState.limit = 150; drawAds(); });
+$('adMore').onclick = () => { adState.limit += 300; drawAds(); };
+$('adTickAll').onclick = () => { adShown.forEach(r => adSetTick(r.k, true)); drawAds(); };
+$('adUntickAll').onclick = () => { adShown.forEach(r => adSetTick(r.k, false)); drawAds(); };
+$('adRefresh').onclick = async () => { try { await api('/api/ads/refresh', { method: 'POST' }); toast('Asking eBay for the latest ad report… this can take a few minutes'); setTimeout(renderAds2, 60000); } catch (e) { toast(e.message); } };
+$('adCsv').onclick = () => csv('promoted-listings.csv', ['Account', 'Item number', 'SKU', 'Title', 'Price', 'Rate now', 'Ad impressions', 'Ad clicks', 'Ad sales units', 'Ad sales £', 'Ad fees £', 'All units sold', 'Profit per ad sale', 'Highest safe rate', 'Suggestion', 'New rate', 'Why'],
+  (adState.rows || []).map(r => [ACC[r.a].name, r.id, r.sku, r.t, r.price, r.rate ?? '', r.p ? r.p.imp : '', r.p ? r.p.clicks : '', r.adU, r.adS.toFixed(2), r.adF.toFixed(2), r.o.u, r.profitNow != null ? r.profitNow.toFixed(2) : '', r.maxRate ?? '', AD_ACT[r.act].name, r.nr ?? '', r.why]));
+$('adApply').onclick = async () => {
+  const b = $('adApply'), ch = adChosen();
+  if (!ch.length) return toast('Nothing ticked to change.');
+  const n = { stop: 0, rate: 0 }; ch.forEach(r => (r.act === 'stop' && !adRateTyped.has(r.k)) ? n.stop++ : n.rate++);
+  if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = `Click again: ${n.rate} rate changes${n.stop ? `, stop ${n.stop}` : ''}`; setTimeout(() => { b.dataset.sure = ''; b.textContent = 'Apply ticked to eBay'; }, 6000); return; }
+  b.dataset.sure = ''; b.textContent = 'Apply ticked to eBay';
+  try {
+    const r = await post('/api/ads/apply', { changes: ch.map(x => ({ account_id: x.aid, item_id: x.id, sku: x.sku, action: x.act === 'stop' && !adRateTyped.has(x.k) ? 'stop' : 'rate', old_rate: x.rate, new_rate: x.nr })) });
+    toast(`Sending ${r.queued} changes to eBay…`); adRateTyped = new Map(); adOff = new Set(); adOn = new Set(); setTimeout(renderAds2, 2500);
+  } catch (e) { toast(e.message); }
+};
+
 // ---------------------------------------------------------------- eBay
 let EBS = null, cpRows = [], jobTimer = null;
 async function renderEbay() {
@@ -1029,7 +1157,7 @@ $('adFile').onchange = async e => {
 };
 
 // ---------------------------------------------------------------- wiring
-const titles = { dash: 'Dashboard', orders: 'Sold items', traffic: 'Traffic', edit: 'Bulk edit', stock: 'Stock sync', msgs: 'Messages', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
+const titles = { dash: 'Dashboard', orders: 'Sold items', traffic: 'Traffic', edit: 'Bulk edit', stock: 'Stock sync', msgs: 'Messages', ads: 'Ads', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
 let page = 'dash';
 function show(p) {
   page = p; document.querySelectorAll('[data-p]').forEach(s => s.hidden = s.id !== 'p-' + p);
@@ -1048,6 +1176,7 @@ function renderAll() {
   if (page === 'edit') renderEdit();
   if (page === 'stock') renderStock();
   if (page === 'msgs') renderMsgs(true);
+  if (page === 'ads') renderAds2();
   if (page === 'cogs') { renderBands(); renderCogs(); }
   if (page === 'charts') renderCharts();
   if (page === 'uploads') renderUploads();

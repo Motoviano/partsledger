@@ -254,3 +254,4 @@ a.btn{text-decoration:none;display:inline-block}
 .tpl textarea{min-height:60px;resize:vertical}
 @media (max-width:860px){.inbox{grid-template-columns:1fr}.threads{border-right:0;max-height:40vh;border-bottom:1px solid var(--line)}.tpl{grid-template-columns:1fr}}
 .convo .head h3 a{color:var(--accent-ink)}
+#adTable .next{max-width:300px;min-width:200px}

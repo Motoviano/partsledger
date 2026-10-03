@@ -18,6 +18,7 @@ from . import ebay as EB
 from . import edits as ED
 from . import stock as ST
 from . import messages as MS
+from . import adperf as AP
 from .auth import check_pw, ensure_admin, hash_pw
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -37,6 +38,8 @@ def startup():
         con.executescript(ED.SCHEMA)
         con.executescript(ST.SCHEMA)
         con.executescript(MS.SCHEMA)
+        con.executescript(AP.SCHEMA)
+        con.execute("UPDATE ad_changes SET status='failed', message='Stopped by a restart; try again' WHERE status='waiting'")
         con.execute("UPDATE edit_jobs SET status='stopped' WHERE status IN ('queued','running')")
         con.execute("UPDATE ebay_jobs SET status='stopped' WHERE status IN ('queued','running')")
         ensure_admin(con)
@@ -44,6 +47,7 @@ def startup():
         EB.start_scheduler(DB.db)
         ST.start_scheduler(DB.db)
         MS.start_scheduler(DB.db)
+        AP.start_scheduler(DB.db)
 
 
 def uk_today():
@@ -609,6 +613,49 @@ async def messages_templates(request: Request):
     b = await request.json()
     with DB.db() as con:
         return MS.set_templates(con, b.get("items") or [])
+
+
+# ------------------------------------------------------------------ Promoted Listings performance
+@app.get("/api/ads")
+def ads_perf(request: Request, window: int = 30):
+    need_user(request)
+    w = 90 if window >= 90 else 30
+    with DB.db() as con:
+        cur = [list(r) for r in con.execute("SELECT account_id,item_id,campaign_id,campaign_name,funding,rate,status FROM ad_current")]
+        perf = [list(r) for r in con.execute("SELECT account_id,item_id,impressions,clicks,ad_units,ad_sales,ad_fees FROM ad_perf WHERE window_days=?", (w,))]
+        state = [dict(r) for r in con.execute("""SELECT a.id,a.name,s.fetched_at,s.status,s.message,s.date_to FROM accounts a
+            JOIN ebay_tokens t ON t.account_id=a.id LEFT JOIN ad_perf_state s ON s.account_id=a.id ORDER BY a.sort,a.id""")]
+        changes = [dict(r) for r in con.execute("SELECT c.*, a.name AS account FROM ad_changes c LEFT JOIN accounts a ON a.id=c.account_id ORDER BY c.id DESC LIMIT 200")]
+    return {"window": w, "current": cur, "perf": perf, "state": state, "changes": changes}
+
+
+@app.post("/api/ads/refresh")
+def ads_refresh(request: Request):
+    need_user(request)
+    import threading
+    threading.Thread(target=AP.refresh_all, args=(DB.db,), daemon=True).start()
+    return {"ok": True}
+
+
+@app.post("/api/ads/apply")
+async def ads_apply(request: Request):
+    u = need_user(request)
+    b = await request.json()
+    ch = b.get("changes") or []
+    if not ch:
+        raise HTTPException(400, "Nothing to change.")
+    ids = []
+    with DB.db() as con:
+        for c in ch:
+            act = "stop" if c.get("action") == "stop" else "rate"
+            nr = None if act == "stop" else float(c["new_rate"])
+            if act == "rate" and not (1.0 <= nr <= 100.0):
+                raise HTTPException(400, f"Ad rate for {c.get('item_id')} must be between 1% and 100%.")
+            ids.append(con.execute("INSERT INTO ad_changes(by,account_id,item_id,sku,action,old_rate,new_rate) VALUES(?,?,?,?,?,?,?)",
+                                   (u["email"], int(c["account_id"]), str(c["item_id"]), c.get("sku"), act, c.get("old_rate"), nr)).lastrowid)
+    import threading
+    threading.Thread(target=AP.apply, args=(DB.db, ids), daemon=True).start()
+    return {"queued": len(ids)}
 
 
 @app.get("/ebay/connect/{account_id}")

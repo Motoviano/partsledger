@@ -18,6 +18,7 @@
       <button data-page="orders"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Sold items</span></button>
       <button data-page="msgs"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4z"/></svg><span>Messages</span><em class="badge" id="msgBadge" hidden></em></button>
       <button data-page="traffic"><svg viewBox="0 0 24 24"><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span>Traffic</span></button>
+      <button data-page="ads"><svg viewBox="0 0 24 24"><path d="M3 11v2a1 1 0 001 1h2l5 4V6L6 10H4a1 1 0 00-1 1z"/><path d="M15 9a4 4 0 010 6M18 6a8 8 0 010 12"/></svg><span>Ads</span></button>
       <button data-page="edit"><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg><span>Bulk edit</span></button>
       <button data-page="stock"><svg viewBox="0 0 24 24"><path d="M3 8l9-5 9 5v8l-9 5-9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg><span>Stock sync</span></button>
       <button data-page="cogs"><svg viewBox="0 0 24 24"><path d="M20 12l-8 8-9-9V3h8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg><span>COGS</span></button>
@@ -101,6 +102,33 @@
           <div style="display:flex;gap:8px;flex-wrap:wrap"><input type="search" id="trSearch" placeholder="Search SKU, product or item number" aria-label="Search listings"><button class="btn" type="button" id="trCsv">Export CSV</button></div></div>
         <div class="tbl-wrap"><table id="trTable"></table></div>
         <div class="more"><button class="btn" id="trMore" type="button">Show more</button></div>
+      </div>
+    </section>
+
+    <section id="p-ads" data-p hidden>
+      <div class="panel">
+        <div class="panel-head"><div><h2>Promoted Listings</h2><p id="adStatus"></p></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button class="btn" type="button" id="adRefresh">Refresh from eBay</button></div></div>
+        <div class="form-row">
+          <div class="f"><label for="adWin">Results from</label><select id="adWin"><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select></div>
+          <div class="f"><label for="adMinP">Keep at least £ profit per sale</label><input type="number" id="adMinP" value="1" step="0.5" min="0" style="width:90px"></div>
+          <div class="f"><label for="adLo">Lowest rate %</label><input type="number" id="adLo" value="2" step="0.5" min="1" style="width:80px"></div>
+          <div class="f"><label for="adHi">Highest rate %</label><input type="number" id="adHi" value="15" step="0.5" min="1" style="width:80px"></div>
+          <div class="f"><label for="adStep">Raise by % points</label><input type="number" id="adStep" value="2" step="0.5" min="0.5" style="width:80px"></div>
+          <div class="f"><label for="adStart">Start new ads at %</label><input type="number" id="adStart" value="5" step="0.5" min="1" style="width:80px"></div>
+        </div>
+      </div>
+      <div class="stats" id="adStats" style="margin-top:14px"></div>
+      <div class="flagbar" id="adFlags" role="group" aria-label="Show"></div>
+      <div class="panel" style="margin-top:14px">
+        <div class="panel-head"><div><h2>Per listing</h2><p id="adSub"></p></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><input type="search" id="adSearch" placeholder="Search SKU, title or item" aria-label="Search listings"><button class="btn" type="button" id="adTickAll">Tick all shown</button><button class="btn" type="button" id="adUntickAll">Untick all shown</button><span class="muted" id="adSel"></span><button class="btn" type="button" id="adCsv">Export CSV</button><button class="btn primary" type="button" id="adApply">Apply ticked to eBay</button></div></div>
+        <div class="tbl-wrap"><table id="adTable"></table></div>
+        <div class="more"><button class="btn" id="adMore" type="button">Show more</button></div>
+      </div>
+      <div class="panel" style="margin-top:14px">
+        <div class="panel-head"><div><h2>Ad changes sent</h2></div></div>
+        <div class="tbl-wrap"><table id="adLog"></table></div>
       </div>
     </section>
 
