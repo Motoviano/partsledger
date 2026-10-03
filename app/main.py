@@ -750,9 +750,16 @@ def payouts(request: Request):
             d = dict(r)
             d["parts"] = parts.get((r["account_id"], r["payout_id"]))
             rows.append(d)
-        state = [dict(r) for r in con.execute("""SELECT a.id,a.name,s.last_check,s.last_status,s.last_message FROM accounts a
-            JOIN ebay_tokens t ON t.account_id=a.id LEFT JOIN payout_state s ON s.account_id=a.id ORDER BY a.sort,a.id""")]
-    return {"rows": rows, "state": state}
+        state = [dict(r) for r in con.execute("""SELECT a.id,a.name,s.last_check,s.last_status,s.last_message,
+            f.at AS funds_at, f.total, f.available, f.processing, f.on_hold FROM accounts a
+            JOIN ebay_tokens t ON t.account_id=a.id LEFT JOIN payout_state s ON s.account_id=a.id
+            LEFT JOIN seller_funds f ON f.account_id=a.id ORDER BY a.sort,a.id""")]
+        # paid out so far, by the month of the transaction (sale, refund, label, fee) inside each payout
+        paid_by_month = [list(r) for r in con.execute("""SELECT l.account_id, substr(l.date,1,7) m, ROUND(SUM(l.amount),2)
+            FROM payout_lines l JOIN payouts p ON p.account_id=l.account_id AND p.payout_id=l.payout_id
+            WHERE p.status='SUCCEEDED' AND l.date!='' GROUP BY 1,2""")]
+        first_payout = {r[0]: r[1] for r in con.execute("SELECT account_id, MIN(date) FROM payouts GROUP BY 1")}
+    return {"rows": rows, "state": state, "paidByMonth": paid_by_month, "firstPayout": first_payout}
 
 
 @app.post("/api/payouts/banked")

@@ -1244,9 +1244,12 @@ function drawPayouts() {
   const banked = paid.filter(p => p.banked), todo = paid.filter(p => !p.banked), prob = rows.filter(poProblem);
   const stat = (k, v, sub, c = '') => `<div class="stat"><small>${k}</small><b class="${c}">${v}</b>${sub ? `<span>${sub}</span>` : ''}</div>`;
   const P = rows.reduce((t, p) => { const x = p.parts || {}; ['sales', 'refunds', 'labels', 'ads', 'fees', 'claims', 'other'].forEach(k => t[k] += x[k] || 0); return t; }, { sales: 0, refunds: 0, labels: 0, ads: 0, fees: 0, claims: 0, other: 0 });
-  $('poStats').innerHTML = stat('Paid out', gbp(sum(paid)), `${n0(paid.length)} payouts`) + stat('Found in bank', gbp(sum(banked)), `${n0(banked.length)} ticked`) +
+  const fsel = PAY.state.filter(x => F().a.has(AIDX[x.id]) && x.total != null);
+  const inEbay = fsel.reduce((t, x) => t + (x.total || 0), 0), held = fsel.reduce((t, x) => t + (x.on_hold || 0), 0);
+  $('poStats').innerHTML = stat('Money in eBay now', fsel.length ? gbp(inEbay) : '–', fsel.length ? (held ? `${gbp(held)} on hold · ` : '') + 'not paid out yet' : 'after the next check') +
+    stat('Paid out', gbp(sum(paid)), `${n0(paid.length)} payouts`) + stat('Found in bank', gbp(sum(banked)), `${n0(banked.length)} ticked`) +
     stat('Not yet ticked', gbp(sum(todo)), `${n0(todo.length)} payouts`, todo.length ? 'neg' : '') + stat('Problems or waiting', n0(prob.length), prob.length ? gbp(sum(prob)) : 'none', prob.length ? 'neg' : '') +
-    stat('Sales in payouts', gbp(P.sales), 'after eBay fees') + stat('Taken off', gbp(P.refunds + P.labels + P.ads + P.fees + P.claims + P.other), 'refunds, labels, ads, fees');
+    stat('Taken off', gbp(P.refunds + P.labels + P.ads + P.fees + P.claims + P.other), `from ${gbp(P.sales)} of sales after eBay fees`);
   const part = (p, k) => p.parts ? money(p.parts[k] || 0) : '<span class="muted">–</span>';
   table($('poTable'), [
     { h: 'Found in bank', l: 1, v: p => p.banked ? 1 : 0, f: p => poOk(p) ? `<input type="checkbox" class="po-b" data-k="${p.account_id}|${esc(p.payout_id)}" ${p.banked ? 'checked' : ''} aria-label="Found payout ${esc(p.payout_id)} in the bank">${p.banked && p.banked_by ? `<span class="sub">${esc(p.banked_by.split('@')[0])}</span>` : ''}` : '' },
@@ -1271,6 +1274,24 @@ function drawPayouts() {
   const ms = [...mm.values()].sort((a, b) => b.k.localeCompare(a.k));
   $('poMonths').innerHTML = ms.length ? `<thead><tr><th class="l">Month</th><th>Payouts</th><th>Paid out</th><th>Found in bank</th><th>Not yet ticked</th></tr></thead><tbody>${ms.map(o => `<tr><td class="l">${new Date(o.k + '-15T12:00:00Z').toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' })}</td><td>${n0(o.n)}</td><td>${gbp(o.paid)}</td><td>${gbp(o.banked)}</td><td class="${o.todo ? 'neg' : ''}">${gbp(o.todo)}</td></tr>`).join('')}</tbody>` : '<tbody><tr><td class="empty">No payouts yet.</td></tr></tbody>';
   poState.csv = rows;
+  drawSalesMonths();
+}
+function drawSalesMonths() {
+  // money from sales per month (sales data) vs paid out so far (transactions inside payouts, by their own date)
+  const f = F(), accIds = new Set(ACC.filter(a => f.a.has(a.i)).map(a => a.id));
+  const exp = new Map(), paid = new Map();
+  I.forEach(x => { if (!f.a.has(x.a)) return; const m = x.d.slice(0, 7); exp.set(m, (exp.get(m) || 0) + x.s + x.fee + x.ad + x.po + x.rf); });
+  OH.forEach(o => { if (!f.a.has(o.a)) return; const m = o.d.slice(0, 7); exp.set(m, (exp.get(m) || 0) + o.v); });
+  PAY.paidByMonth.forEach(([aid, m, v]) => { if (accIds.has(aid)) paid.set(m, (paid.get(m) || 0) + v); });
+  const firsts = Object.entries(PAY.firstPayout || {}).filter(([aid]) => accIds.has(+aid)).map(([, d]) => (d || '').slice(0, 10)).sort();
+  const covered = firsts.length ? firsts[firsts.length - 1] : null;  // payouts are loaded for every selected account from this date
+  const months = [...new Set([...exp.keys(), ...paid.keys()])].sort().reverse().slice(0, 8);
+  $('poSalesMonths').innerHTML = months.length ? `<thead><tr><th class="l">Sales month</th><th>Money from sales</th><th>Paid out so far</th><th>Still to come</th><th class="l"></th></tr></thead><tbody>${months.map(m => {
+    const e = exp.get(m) || 0, p = paid.get(m) || 0, left = e - p, partial = covered && m + '-31' < covered.slice(0, 7) + '-01';
+    const label = new Date(m + '-15T12:00:00Z').toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+    return `<tr><td class="l">${label}</td><td>${gbp(e)}</td><td>${gbp(p)}</td><td class="${left > 1 && !partial ? 'neg' : ''}">${partial ? '<span class="muted">–</span>' : gbp(left)}</td>
+      <td class="l prod"><span class="muted">${partial ? 'Payouts before ' + nice(covered) + ' aren\'t loaded' : m === TODAY.slice(0, 7) ? 'Month not finished' : Math.abs(left) <= 1 ? 'All paid out' : left > 0 ? 'In your eBay balance or on its way' : 'Paid out more than this month earned (earlier sales or adjustments)'}</span></td></tr>`;
+  }).join('')}</tbody>` : '<tbody><tr><td class="empty">No data yet.</td></tr></tbody>';
 }
 $('poShow').addEventListener('change', drawPayouts);
 $('poCheck').onclick = async () => { try { await api('/api/payouts/check', { method: 'POST' }); toast('Checking eBay for payouts…'); setTimeout(renderPayouts, 20000); } catch (e) { toast(e.message); } };

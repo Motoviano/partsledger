@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS payouts(
 CREATE TABLE IF NOT EXISTS payout_lines(
   account_id INTEGER NOT NULL, payout_id TEXT NOT NULL, transaction_id TEXT NOT NULL, type TEXT, fee_type TEXT,
   amount REAL, order_id TEXT, date TEXT, PRIMARY KEY(account_id, payout_id, transaction_id));
+CREATE TABLE IF NOT EXISTS seller_funds(
+  account_id INTEGER PRIMARY KEY, at TEXT, total REAL, available REAL, processing REAL, on_hold REAL, raw TEXT);
 CREATE TABLE IF NOT EXISTS payout_state(
   account_id INTEGER PRIMARY KEY, last_check TEXT, last_status TEXT, last_message TEXT, backfilled INTEGER DEFAULT 0);
 """
@@ -77,6 +79,14 @@ def check(db_factory):
                         "SELECT p.payout_id, p.status, (SELECT COUNT(*) FROM payout_lines l WHERE l.account_id=p.account_id AND l.payout_id=p.payout_id) n FROM payouts p WHERE p.account_id=?", (a,))}
                 days = 21 if st and st["backfilled"] else 120
                 ps = fetch_payouts(tok, sign, (today - _dt.timedelta(days=days)).isoformat(), today.isoformat())
+                try:  # money still in the eBay account (not paid out yet)
+                    f = EB._get_json(f"{EB.FIN}/seller_funds_summary", tok, sign=sign)
+                    with db_factory() as con:
+                        con.execute("INSERT OR REPLACE INTO seller_funds VALUES(?,?,?,?,?,?,?)",
+                                    (a, now_iso(), _amt(f.get("totalFunds")), _amt(f.get("availableFunds")), _amt(f.get("processingFunds")),
+                                     _amt(f.get("fundsOnHold")), json.dumps(f)[:4000]))
+                except Exception:
+                    DB.log_exc("payouts.funds", level="warn")
                 new_lines = 0
                 for p in ps:
                     pid = str(p.get("payoutId"))
@@ -99,13 +109,15 @@ def check(db_factory):
                         for t in lines:
                             con.execute("INSERT OR REPLACE INTO payout_lines VALUES(?,?,?,?,?,?,?,?)",
                                         (a, pid, str(t.get("transactionId")), t.get("transactionType"), t.get("feeType"),
-                                         round(EB._signed(t), 2), t.get("orderId") or EB._ref(t, "ORDER_ID"), (t.get("transactionDate") or "")[:10]))
+                                         round(EB._signed(t), 2), t.get("orderId") or EB._ref(t, "ORDER_ID"),
+                                         (t.get("transactionDate") or p.get("payoutDate") or "")[:10]))
                     new_lines += len(lines)
                     time.sleep(0.3)
                 with db_factory() as con:
                     con.execute("""INSERT INTO payout_state(account_id,last_check,last_status,last_message,backfilled) VALUES(?,?,?,?,1)
                                    ON CONFLICT(account_id) DO UPDATE SET last_check=excluded.last_check,last_status=excluded.last_status,last_message=excluded.last_message,backfilled=1""",
-                                (a, now_iso(), "ok", f"{len(ps)} payouts in the last {days} days"))
+                                (a, now_iso(), "ok", f"{len(ps)} payouts in the last {days} days" + (
+                                    f" ({min(p.get('payoutDate', '')[:10] for p in ps)} to {max(p.get('payoutDate', '')[:10] for p in ps)})" if ps else "")))
             except Exception as e:
                 DB.log_exc("payouts.check")
                 with db_factory() as con:
