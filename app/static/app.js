@@ -845,7 +845,11 @@ $('stPushBtn').onclick = async () => {
 };
 
 // ---------------------------------------------------------------- buyer messages
-let MSG = null, msSel = null, msDrafts = new Map();
+let MSG = null, msSel = null, msDrafts = new Map(), msTicked = new Set(), msShownOpen = [];
+function msBulkCount() {
+  const n = msTicked.size; $('msBulkDone').disabled = !n; $('msBulkDone').textContent = n ? `Mark ${n} as done` : 'Mark ticked as done';
+  $('msTickAll').textContent = msShownOpen.length && msShownOpen.every(t => msTicked.has(t.k)) ? 'Untick all' : `Tick all shown (${msShownOpen.length})`;
+}
 const ukTime = s => s ? new Date(s + 'Z').toLocaleString('en-GB', { timeZone: 'Europe/London', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
 function ago(s) {
   const m = (Date.now() - new Date(s + 'Z')) / 6e4;
@@ -882,11 +886,17 @@ function drawThreads() {
   const rows = all.filter(t => (show === 'all' || (show === 'open' && t.open) || (show === 'answered' && !t.open && !t.done) || (show === 'done' && t.done)) &&
     (!q || t.sender.toLowerCase().includes(q) || (t.title || '').toLowerCase().includes(q) || t.msgs.some(m => (m.body || '').toLowerCase().includes(q) || (m.subject || '').toLowerCase().includes(q))))
     .sort((x, y) => (y.open - x.open) || y.last.created.localeCompare(x.last.created));
-  $('msList').innerHTML = rows.length ? rows.map(t => `<button type="button" role="listitem" class="thread ${t.open ? 'open' : ''}" data-k="${esc(t.k)}" aria-current="${msSel === t.k}">
+  // tick boxes for conversations waiting for a reply, so several can be marked done at once
+  const tickable = rows.filter(t => t.open);
+  [...msTicked].forEach(k => { if (!tickable.some(t => t.k === k)) msTicked.delete(k); });
+  $('msBulk').hidden = !tickable.length;
+  $('msList').innerHTML = rows.length ? rows.map(t => `<div class="trow" role="listitem">${t.open ? `<input type="checkbox" class="ms-tick" data-k="${esc(t.k)}" ${msTicked.has(t.k) ? 'checked' : ''} aria-label="Tick conversation with ${esc(t.sender)}">` : '<span class="ms-tick-gap"></span>'}<button type="button" class="thread ${t.open ? 'open' : ''}" data-k="${esc(t.k)}" aria-current="${msSel === t.k}">
       <span class="top"><span><span class="dot" style="background:${accColor(t.a)}"></span>${esc(accName(t.a))}</span><span>${ago(t.last.created)}</span></span>
-      <b>${esc(t.sender)}</b><span class="it">${esc(t.title || 'General question')}</span><span class="sn">${esc((t.last.body || t.last.subject || '').slice(0, 120))}</span></button>`).join('')
+      <b>${esc(t.sender)}</b><span class="it">${esc(t.title || 'General question')}</span><span class="sn">${esc((t.last.body || t.last.subject || '').slice(0, 120))}</span></button></div>`).join('')
     : `<p class="empty">${show === 'open' ? 'No questions waiting for a reply.' : 'No messages match.'}</p>`;
   $('msList').querySelectorAll('.thread').forEach(b => b.onclick = () => { msSel = b.dataset.k; $('msList').querySelectorAll('.thread').forEach(x => x.setAttribute('aria-current', x === b)); drawConvo(); });
+  $('msList').querySelectorAll('.ms-tick').forEach(c => c.onchange = () => { c.checked ? msTicked.add(c.dataset.k) : msTicked.delete(c.dataset.k); msBulkCount(); });
+  msShownOpen = tickable; msBulkCount();
   if (!msSel && rows.length && matchMedia('(min-width:861px)').matches) { msSel = rows[0].k; $('msList').querySelector('.thread').setAttribute('aria-current', 'true'); drawConvo(); }
   if (msSel && !rows.some(t => t.k === msSel) && !all.some(t => t.k === msSel)) { msSel = null; $('msConvo').innerHTML = '<p class="empty">Choose a conversation.</p>'; }
 }
@@ -943,6 +953,13 @@ function drawTemplates() {
 $('tplAdd').onclick = () => { MSG.templates.push({ name: 'New reply', text: 'Hi {buyer}, ' }); drawTemplates(); };
 $('tplSave').onclick = async () => { try { MSG.templates = await post('/api/messages/templates', { items: MSG.templates }); toast('Quick replies saved'); drawTemplates(); if (msSel) drawConvo(); } catch (e) { toast(e.message); } };
 $('msShow').addEventListener('change', drawThreads);
+$('msTickAll').onclick = () => { const all = msShownOpen.every(t => msTicked.has(t.k)); msShownOpen.forEach(t => all ? msTicked.delete(t.k) : msTicked.add(t.k)); drawThreads(); };
+$('msBulkDone').onclick = async () => {
+  const ths = msThreads().filter(t => msTicked.has(t.k));
+  const items = ths.flatMap(t => t.openMsgs.map(m => ({ account_id: t.a, message_id: m.message_id })));
+  if (!items.length) return;
+  try { await post('/api/messages/done', { items, done: true }); toast(`${ths.length} conversation${ths.length === 1 ? '' : 's'} marked done`); msTicked.clear(); renderMsgs(true); } catch (e) { toast(e.message); }
+};
 $('msSearch').addEventListener('input', drawThreads);
 $('msCheck').onclick = async () => { try { await api('/api/messages/check', { method: 'POST' }); toast('Checking eBay for new messages…'); setTimeout(() => renderMsgs(true), 8000); } catch (e) { toast(e.message); } };
 setInterval(() => { if (page === 'msgs' && MSG && !document.hidden && !($('msText') && document.activeElement === $('msText'))) renderMsgs(true); }, 120000);

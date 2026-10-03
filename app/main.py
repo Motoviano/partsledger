@@ -595,11 +595,13 @@ async def messages_reply(request: Request):
 async def messages_done(request: Request):
     need_user(request)
     b = await request.json()
-    ids = [str(x) for x in b.get("message_ids") or []]
+    # either one account's message_ids, or items=[{account_id, message_id}] across accounts
+    items = [(int(x["account_id"]), str(x["message_id"])) for x in b.get("items") or []]
+    items += [(int(b["account_id"]), str(x)) for x in b.get("message_ids") or []]
     with DB.db() as con:
-        for mid in ids:
-            con.execute("UPDATE messages SET done=? WHERE account_id=? AND message_id=?", (1 if b.get("done", True) else 0, int(b["account_id"]), mid))
-    return {"ok": True}
+        for aid, mid in items:
+            con.execute("UPDATE messages SET done=? WHERE account_id=? AND message_id=?", (1 if b.get("done", True) else 0, aid, mid))
+    return {"ok": True, "updated": len(items)}
 
 
 @app.post("/api/messages/check")

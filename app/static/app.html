@@ -82,7 +82,8 @@
             <input type="search" id="msSearch" placeholder="Search buyer, item or text" aria-label="Search messages">
             <button class="btn" type="button" id="msCheck">Check now</button></div></div>
         <div class="inbox">
-          <div class="threads" id="msList" role="list"></div>
+          <div class="threads"><div class="ms-bulk" id="msBulk" hidden><button class="btn" type="button" id="msTickAll">Tick all shown</button><button class="btn primary" type="button" id="msBulkDone" disabled>Mark ticked as done</button></div>
+            <div id="msList" role="list"></div></div>
           <div class="convo" id="msConvo"><p class="empty">Choose a conversation.</p></div>
         </div>
       </div>

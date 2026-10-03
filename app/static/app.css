@@ -256,3 +256,9 @@ a.btn{text-decoration:none;display:inline-block}
 .convo .head h3 a{color:var(--accent-ink)}
 #adTable .next{max-width:300px;min-width:200px}
 .logd{white-space:pre-wrap;font:12px/1.4 var(--mono,monospace);background:var(--surface2);border:1px solid var(--line);border-radius:6px;padding:8px;margin:6px 0 0;max-height:260px;overflow:auto}
+.ms-bulk{display:flex;gap:8px;flex-wrap:wrap;padding:8px 10px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--surface);z-index:1}
+.ms-bulk .btn{padding:5px 10px;font-size:13px}
+.trow{display:flex;align-items:stretch;border-bottom:1px solid var(--line)}
+.trow .thread{border-bottom:0;padding-left:6px}
+.ms-tick{margin:14px 0 0 12px;width:16px;height:16px;flex:none;accent-color:var(--accent)}
+.ms-tick-gap{width:28px;flex:none}
