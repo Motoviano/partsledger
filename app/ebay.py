@@ -715,6 +715,36 @@ def fetch_listings(token):
         page += 1
 
 
+def fetch_seller_list(token, days_ahead=119):
+    """Every active fixed-price listing, found by end time. Unlike the My eBay active list this also returns
+    listings kept alive at quantity 0 by out-of-stock control (GTC listings renew every 30 days)."""
+    import datetime as _dt
+    now = _dt.datetime.utcnow()
+    out, page = [], 1
+    while True:
+        def b(root, page=page):
+            _el(root, "EndTimeFrom", now.strftime("%Y-%m-%dT%H:%M:%S.000Z"))
+            _el(root, "EndTimeTo", (now + _dt.timedelta(days=days_ahead)).strftime("%Y-%m-%dT%H:%M:%S.000Z"))
+            _el(root, "GranularityLevel", "Coarse")
+            _el(root, "IncludeVariations", "false")
+            pg = _el(root, "Pagination")
+            _el(pg, "EntriesPerPage", "200")
+            _el(pg, "PageNumber", str(page))
+        r = trading("GetSellerList", token, b)
+        for it in r.iter(N + "Item"):
+            if (it.findtext(f"{N}SellingStatus/{N}ListingStatus") or "Active") != "Active":
+                continue
+            q = int(it.findtext(N + "Quantity") or 0)
+            sold = int(it.findtext(f"{N}SellingStatus/{N}QuantitySold") or 0)
+            out.append({"item_id": it.findtext(N + "ItemID"), "sku": it.findtext(N + "SKU"), "title": it.findtext(N + "Title"),
+                        "price": float(it.findtext(f"{N}SellingStatus/{N}CurrentPrice") or it.findtext(f"{N}StartPrice") or 0),
+                        "qty": max(q - sold, 0), "category": None, "sold": sold})
+        pages = int(r.findtext(f"{N}PaginationResult/{N}TotalNumberOfPages") or 1)
+        if page >= pages:
+            return out
+        page += 1
+
+
 def _amt(o):
     try:
         return float((o or {}).get("value"))
@@ -819,6 +849,14 @@ def sync_account(db_factory, account_id, days_back=3, listings=True):
         msg.append(f"{added} new rows from {len(tx)} eBay transactions and {len(orders)} orders ({start} to {end})")
     if listings:
         ls = fetch_listings(tok)
+        try:  # add listings the My eBay list leaves out, e.g. sold out but kept live by out-of-stock control
+            seen = {l["item_id"] for l in ls}
+            extra = [l for l in fetch_seller_list(tok) if l["item_id"] not in seen]
+            ls += extra
+            if extra:
+                msg.append(f"{len(extra)} more found by end date (incl. sold out)")
+        except EbayError:
+            pass
         with db_factory() as con:
             IM.store_listings(con, account_id, ls)
             con.execute("UPDATE sync_state SET last_listing_sync=datetime('now') WHERE account_id=?", (account_id,))
