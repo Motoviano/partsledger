@@ -507,6 +507,7 @@ function edShowOpts() {
     price: how === 'profit' ? 'Works out the lowest price that leaves this profit after COGS, postage (your average label cost for the SKU), eBay fees (each account\'s own rate over the last 90 days) and ads.' : 'Changes the Buy It Now price.',
     qty: 'Sets the quantity available. 0 keeps the listing but shows it as out of stock (if out-of-stock control is on in eBay). For SKUs in Stock sync, change the stock number on the Stock sync page instead, or the sync will put it back.',
     title: 'eBay titles can be up to 80 characters. Listings that would go over are left out.',
+    fitment: 'Reads each ticked listing\'s fitment rows and item specifics from eBay, then adds what the title is missing: make and model, the year range (e.g. 2012-2023, after the model and platform such as MK8) and the OE number. Nothing is removed and titles stay within 80 characters. Up to 500 listings at a time.',
     specific: 'Adds or changes one item specific. The listing\'s other specifics stay as they are. Several values: separate them with |.',
   }[fld];
 }
@@ -621,6 +622,7 @@ $('edTypedBtn').onclick = () => {
 $('edPreview').onclick = () => {
   const picked = edPicked().filter(r => !edOff.has(edKey(r))), fld = $('edField').value;
   if (!picked.length) return toast('No listings are ticked in step 1.');
+  if (fld === 'fitment') return edFitment(picked);
   const pf = edProfitFn(), out = [];
   let same = 0;
   for (const r of picked) {
@@ -674,6 +676,34 @@ $('edPreview').onclick = () => {
   edMode = 'bulk';
   edShowPreview(out, same, `listings get a new ${{ price: 'price', qty: 'quantity', title: 'title', specific: 'item specific' }[fld]}`);
 };
+async function edFitment(picked) {
+  if (picked.length > 500) return toast(`${n0(picked.length)} listings are ticked; do up to 500 at a time (use the filters in step 1).`);
+  $('edPrevPanel').hidden = false; $('edTable').innerHTML = ''; $('edPrevSub').textContent = `Reading fitment from eBay… 0 of ${n0(picked.length)}`;
+  $('edPrevPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  let job;
+  try { job = await post('/api/titles/suggest', { items: picked.map(r => ({ account_id: r.aid, item_id: r.id, sku: r.sku, title: r.t })) }); } catch (e) { $('edPrevPanel').hidden = true; return toast(e.message); }
+  let res;
+  for (;;) {
+    await new Promise(ok => setTimeout(ok, 2000));
+    try { res = await api('/api/titles/suggest/' + job.job); } catch (e) { return toast(e.message); }
+    $('edPrevSub').textContent = `Reading fitment from eBay… ${n0(res.job.done)} of ${n0(res.job.total)}`;
+    if (['finished', 'stopped'].includes(res.job.status)) break;
+  }
+  const by = new Map(res.rows.map(x => [x.account_id + '|' + x.item_id, x]));
+  let same = 0; const out = [];
+  picked.forEach(r => {
+    const x = by.get(edKey(r)); if (!x) return;
+    if (x.status !== 'ok') { out.push({ ...r, fld: 'title', cur: r.t, nv: null, ok: false, note: 'Couldn\'t read it from eBay: ' + (x.note || '') }); return; }
+    if (!x.new_title || x.new_title === x.old_title) {
+      if ((x.note || '').startsWith('Title says')) out.push({ ...r, fld: 'title', cur: x.old_title, nv: x.old_title, ok: false, note: x.note });
+      else same++;
+      return;
+    }
+    out.push({ ...r, t: x.old_title, fld: 'title', cur: x.old_title, nv: x.new_title, ok: x.new_title.length <= 80, note: `Adds ${x.added} · ${x.new_title.length} characters · ${x.note}` });
+  });
+  edMode = 'fitment';
+  edShowPreview(out, same, 'titles can be improved from fitment');
+}
 const FLD_NAME = { price: 'Price', qty: 'Stock', title: 'Title', specific: 'Item specific' };
 function edFmt(fld, v) { return v == null ? '–' : fld === 'price' ? gbp(v) : fld === 'qty' ? n0(v) : fld === 'specific' ? `${esc(v.name)}: <b>${esc(v.value)}</b>` : esc(v); }
 function drawEdit() {
@@ -706,7 +736,7 @@ $('edApply').onclick = async () => {
   const nList = new Set(ch.map(x => x.aid + '|' + x.id)).size;
   if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = `Click again to change ${n0(nList)} live listings`; setTimeout(() => { b.dataset.sure = ''; b.textContent = 'Apply to eBay'; }, 6000); return; }
   b.dataset.sure = ''; b.textContent = 'Apply to eBay';
-  const summary = edMode === 'typed' ? `Typed changes on ${nList} listing${nList === 1 ? '' : 's'}`
+  const summary = edMode === 'fitment' ? 'Title from fitment (years, make/model, OE)' : edMode === 'typed' ? `Typed changes on ${nList} listing${nList === 1 ? '' : 's'}`
     : fld === 'price' ? { profit: `Price: profit at least £${$('edPriceVal').value} after ${$('edAd').value}% ads`, pct: `Price ${$('edPriceVal').value}%`, add: `Price ${$('edPriceVal').value >= 0 ? '+' : ''}£${$('edPriceVal').value}`, set: `Price set to £${$('edPriceVal').value}` }[$('edPriceHow').value]
     : fld === 'qty' ? `Quantity set to ${$('edQty').value}` : fld === 'title' ? `Title: ${$('edTitleHow').selectedOptions[0].text.toLowerCase()} "${$('edTitleHow').value === 'replace' ? $('edFind').value + '" → "' + $('edRepl').value : $('edRepl').value}"`
     : `${$('edSpecName').value} = ${$('edSpecVal').value} (${$('edSpecMode').value === 'missing' ? 'where missing' : 'all'})`;
@@ -1190,6 +1220,63 @@ $('rtMore').onclick = () => { rtListState.limit += 200; drawReturns(); };
 $('rtCsv').onclick = () => csv('returns.csv', ['Opened', 'Account', 'Type', 'Order', 'Item number', 'SKU', 'Title', 'Buyer', 'Reason', 'Buyer comment', 'Status', 'Refund', 'Net on the sale'],
   (rtListState.csv || []).map(r => [r.created, ACC[r.a].name, r.kind, r.order_id || '', r.item_id || '', r.sku, r.title, r.buyer || '', rtReason(r), r.comments || '', r.state || r.status || '', r.refund ?? '', r.net != null ? r.net.toFixed(2) : '']));
 
+// ---------------------------------------------------------------- payouts
+let PAY = null;
+const poState = { sort: { i: 1, asc: false }, limit: 500, render: () => drawPayouts(), empty: 'No payouts for this selection.' };
+const poOk = p => /SUCCEEDED/i.test(p.status || ''), poProblem = p => /FAIL|REVERS|RETRY|INITIATED|PENDING/i.test(p.status || '');
+const poStatus = s => ({ SUCCEEDED: ['Paid', 'k'], INITIATED: ['On its way', 'b'], RETRYABLE_FAILED: ['Failed, eBay will retry', 'ret'], TERMINAL_FAILED: ['Failed', 'm'], REVERSED: ['Reversed', 'm'] }[s] || [String(s || '–').toLowerCase().replace(/_/g, ' '), '']);
+async function renderPayouts() {
+  try { PAY = await api('/api/payouts'); } catch (e) { toast(e.message); return; }
+  const last = PAY.state.map(s => s.last_check).filter(Boolean).sort().pop();
+  $('poStatus').innerHTML = PAY.state.length ? (last ? `Checked ${ago(last)} (every 6 hours). ` : 'First check runs within a few minutes. ') + PAY.state.map(s => s.last_message ? `${esc(s.name)}: ${s.last_status === 'error' ? '<span class="neg">' + esc(s.last_message) + '</span>' : esc(s.last_message)}` : '').filter(Boolean).join(' · ') : 'Connect your eBay accounts on the eBay page first.';
+  drawPayouts();
+}
+function poRows() {
+  const f = F(); const to = $('fPeriod').value === 'all' ? TODAY : f.r[1], show = $('poShow').value;
+  return PAY.rows.map(p => ({ ...p, a: AIDX[p.account_id], d: (p.date || '').slice(0, 10) }))
+    .filter(p => p.a !== undefined && f.a.has(p.a) && p.d >= f.r[0] && p.d <= to)
+    .filter(p => !show || (show === 'todo' ? poOk(p) && !p.banked : show === 'done' ? !!p.banked : poProblem(p)));
+}
+function drawPayouts() {
+  if (!PAY) return;
+  const rows = poRows(), paid = rows.filter(poOk);
+  const sum = xs => xs.reduce((t, p) => t + (p.amount || 0), 0);
+  const banked = paid.filter(p => p.banked), todo = paid.filter(p => !p.banked), prob = rows.filter(poProblem);
+  const stat = (k, v, sub, c = '') => `<div class="stat"><small>${k}</small><b class="${c}">${v}</b>${sub ? `<span>${sub}</span>` : ''}</div>`;
+  const P = rows.reduce((t, p) => { const x = p.parts || {}; ['sales', 'refunds', 'labels', 'ads', 'fees', 'claims', 'other'].forEach(k => t[k] += x[k] || 0); return t; }, { sales: 0, refunds: 0, labels: 0, ads: 0, fees: 0, claims: 0, other: 0 });
+  $('poStats').innerHTML = stat('Paid out', gbp(sum(paid)), `${n0(paid.length)} payouts`) + stat('Found in bank', gbp(sum(banked)), `${n0(banked.length)} ticked`) +
+    stat('Not yet ticked', gbp(sum(todo)), `${n0(todo.length)} payouts`, todo.length ? 'neg' : '') + stat('Problems or waiting', n0(prob.length), prob.length ? gbp(sum(prob)) : 'none', prob.length ? 'neg' : '') +
+    stat('Sales in payouts', gbp(P.sales), 'after eBay fees') + stat('Taken off', gbp(P.refunds + P.labels + P.ads + P.fees + P.claims + P.other), 'refunds, labels, ads, fees');
+  const part = (p, k) => p.parts ? money(p.parts[k] || 0) : '<span class="muted">–</span>';
+  table($('poTable'), [
+    { h: 'Found in bank', l: 1, v: p => p.banked ? 1 : 0, f: p => poOk(p) ? `<input type="checkbox" class="po-b" data-k="${p.account_id}|${esc(p.payout_id)}" ${p.banked ? 'checked' : ''} aria-label="Found payout ${esc(p.payout_id)} in the bank">${p.banked && p.banked_by ? `<span class="sub">${esc(p.banked_by.split('@')[0])}</span>` : ''}` : '' },
+    { h: 'Date', l: 1, v: p => p.date || '', f: p => p.d ? nice(p.d) : '–' },
+    { h: 'Account', l: 1, v: p => p.account_id, f: p => `<span class="dot" style="background:${ACC[p.a].color}"></span>${esc(ACC[p.a].name)}` },
+    { h: 'Amount', v: p => p.amount || 0, f: p => `<b>${gbp(p.amount)}</b>` },
+    { h: 'Status', l: 1, v: p => p.status || '', f: p => { const [n, c] = poStatus(p.status); return `<span class="chip ${c}">${esc(n)}</span>`; } },
+    { h: 'To', l: 1, v: p => p.last4 || '', f: p => `${esc(p.instrument || 'Bank')}${p.last4 ? ' ••' + esc(p.last4) : ''}${p.bank_ref ? `<span class="sub">ref ${esc(p.bank_ref)}</span>` : ''}` },
+    { h: 'Sales', v: p => p.parts ? p.parts.sales : 0, f: p => part(p, 'sales') + (p.parts && p.parts.orders ? `<span class="sub">${n0(p.parts.orders)} orders</span>` : '') },
+    { h: 'Refunds', v: p => p.parts ? p.parts.refunds : 0, f: p => part(p, 'refunds') },
+    { h: 'Postage labels', v: p => p.parts ? p.parts.labels : 0, f: p => part(p, 'labels') },
+    { h: 'Ad fees', v: p => p.parts ? p.parts.ads : 0, f: p => part(p, 'ads') },
+    { h: 'Other fees', v: p => p.parts ? p.parts.fees + p.parts.claims + p.parts.other : 0, f: p => p.parts ? money(p.parts.fees + p.parts.claims + p.parts.other) : '–' },
+    { h: 'Check', v: p => 0, f: p => { if (!p.parts) return ''; const s = ['sales', 'refunds', 'labels', 'ads', 'fees', 'claims', 'other'].reduce((t, k) => t + (p.parts[k] || 0), 0); const diff = Math.abs(s - (p.amount || 0)); return diff < 0.02 ? '<span class="chip k">Adds up</span>' : `<span class="chip ret" title="Parts add up to ${gbp(s)}">Off by ${gbp(diff)}</span>`; } }],
+    rows, null, poState);
+  $('poTable').querySelectorAll('.po-b').forEach(b => b.onchange = async () => {
+    const [account_id, payout_id] = b.dataset.k.split('|');
+    try { await post('/api/payouts/banked', { items: [{ account_id: +account_id, payout_id, banked: b.checked }] }); const p = PAY.rows.find(x => x.account_id == account_id && x.payout_id === payout_id); p.banked = b.checked ? 1 : 0; p.banked_by = b.checked ? ME.email : null; drawPayouts(); } catch (e) { toast(e.message); b.checked = !b.checked; }
+  });
+  // by month
+  const mm = new Map(); rows.forEach(p => { const k = p.d.slice(0, 7), o = mm.get(k) || { k, n: 0, paid: 0, banked: 0, todo: 0 }; o.n++; if (poOk(p)) { o.paid += p.amount || 0; if (p.banked) o.banked += p.amount || 0; else o.todo += p.amount || 0; } mm.set(k, o); });
+  const ms = [...mm.values()].sort((a, b) => b.k.localeCompare(a.k));
+  $('poMonths').innerHTML = ms.length ? `<thead><tr><th class="l">Month</th><th>Payouts</th><th>Paid out</th><th>Found in bank</th><th>Not yet ticked</th></tr></thead><tbody>${ms.map(o => `<tr><td class="l">${new Date(o.k + '-15T12:00:00Z').toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' })}</td><td>${n0(o.n)}</td><td>${gbp(o.paid)}</td><td>${gbp(o.banked)}</td><td class="${o.todo ? 'neg' : ''}">${gbp(o.todo)}</td></tr>`).join('')}</tbody>` : '<tbody><tr><td class="empty">No payouts yet.</td></tr></tbody>';
+  poState.csv = rows;
+}
+$('poShow').addEventListener('change', drawPayouts);
+$('poCheck').onclick = async () => { try { await api('/api/payouts/check', { method: 'POST' }); toast('Checking eBay for payouts…'); setTimeout(renderPayouts, 20000); } catch (e) { toast(e.message); } };
+$('poCsv').onclick = () => csv('payouts.csv', ['Date', 'Account', 'Payout ID', 'Amount', 'Currency', 'Status', 'To', 'Last 4', 'Bank reference', 'Sales', 'Refunds', 'Postage labels', 'Ad fees', 'Other fees', 'Orders', 'Found in bank', 'Ticked by'],
+  (poState.csv || []).map(p => [p.date, ACC[p.a].name, p.payout_id, p.amount, p.currency, p.status, p.instrument || '', p.last4 || '', p.bank_ref || '', ...(p.parts ? [p.parts.sales, p.parts.refunds, p.parts.labels, p.parts.ads, (p.parts.fees + p.parts.claims + p.parts.other).toFixed(2), p.parts.orders] : ['', '', '', '', '', '']), p.banked ? 'Yes' : '', p.banked_by || '']));
+
 // ---------------------------------------------------------------- eBay
 let EBS = null, cpRows = [], jobTimer = null;
 async function renderEbay() {
@@ -1302,7 +1389,7 @@ $('adFile').onchange = async e => {
 };
 
 // ---------------------------------------------------------------- wiring
-const titles = { dash: 'Dashboard', orders: 'Sold items', traffic: 'Traffic', edit: 'Bulk edit', stock: 'Stock sync', msgs: 'Messages', ads: 'Ads', returns: 'Returns', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
+const titles = { dash: 'Dashboard', orders: 'Sold items', traffic: 'Traffic', edit: 'Bulk edit', stock: 'Stock sync', msgs: 'Messages', ads: 'Ads', returns: 'Returns', payouts: 'Payouts', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
 let page = 'dash';
 function show(p) {
   page = p; document.querySelectorAll('[data-p]').forEach(s => s.hidden = s.id !== 'p-' + p);
@@ -1323,6 +1410,7 @@ function renderAll() {
   if (page === 'msgs') renderMsgs(true);
   if (page === 'ads') renderAds2();
   if (page === 'returns') renderReturns();
+  if (page === 'payouts') renderPayouts();
   if (page === 'cogs') { renderBands(); renderCogs(); }
   if (page === 'charts') renderCharts();
   if (page === 'uploads') renderUploads();

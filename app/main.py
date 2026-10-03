@@ -20,6 +20,8 @@ from . import stock as ST
 from . import messages as MS
 from . import adperf as AP
 from . import returns as RT
+from . import payouts as PO
+from . import titles as TL
 from .auth import check_pw, ensure_admin, hash_pw
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -41,6 +43,9 @@ def startup():
         con.executescript(MS.SCHEMA)
         con.executescript(AP.SCHEMA)
         con.executescript(RT.SCHEMA)
+        con.executescript(PO.SCHEMA)
+        con.executescript(TL.SCHEMA)
+        con.execute("UPDATE title_jobs SET status='stopped' WHERE status IN ('queued','running')")
         AP.migrate(con)
         con.execute("UPDATE ad_changes SET status='failed', message='Stopped by a restart; try again' WHERE status='waiting'")
         con.execute("UPDATE edit_jobs SET status='stopped' WHERE status IN ('queued','running')")
@@ -54,6 +59,7 @@ def startup():
         MS.start_scheduler(DB.db)
         AP.start_scheduler(DB.db)
         RT.start_scheduler(DB.db)
+        PO.start_scheduler(DB.db)
 
 
 def uk_today():
@@ -690,6 +696,82 @@ def returns_check(request: Request):
     need_user(request)
     import threading
     threading.Thread(target=RT.check, args=(DB.db,), daemon=True).start()
+    return {"ok": True}
+
+
+# ------------------------------------------------------------------ titles from fitment
+@app.post("/api/titles/suggest")
+async def titles_suggest(request: Request):
+    u = need_user(request)
+    b = await request.json()
+    items = (b.get("items") or [])[:500]
+    if not items:
+        raise HTTPException(400, "Tick at least one listing.")
+    with DB.db() as con:
+        for a in {int(i["account_id"]) for i in items}:
+            EB.access_token(con, a)
+        jid = con.execute("INSERT INTO title_jobs(created_by,total,status) VALUES(?,?,?)", (u["email"], len(items), "queued")).lastrowid
+        for i in items:
+            con.execute("INSERT OR IGNORE INTO title_suggest(job_id,account_id,item_id,old_title,sku) VALUES(?,?,?,?,?)",
+                        (jid, int(i["account_id"]), str(i["item_id"]), i.get("title"), i.get("sku")))
+    import threading
+    threading.Thread(target=TL.run_job, args=(DB.db, jid), daemon=True).start()
+    return {"job": jid}
+
+
+@app.get("/api/titles/suggest/{job_id}")
+def titles_job(job_id: int, request: Request):
+    need_user(request)
+    with DB.db() as con:
+        j = con.execute("SELECT * FROM title_jobs WHERE id=?", (job_id,)).fetchone()
+        if not j:
+            raise HTTPException(404, "Not found.")
+        rows = [dict(r) for r in con.execute("SELECT * FROM title_suggest WHERE job_id=?", (job_id,))] if j["status"] in ("finished", "stopped") else []
+    return {"job": dict(j), "rows": rows}
+
+
+# ------------------------------------------------------------------ payouts
+PAYOUT_PARTS = {"SALE": "sales", "REFUND": "refunds", "SHIPPING_LABEL": "labels", "NON_SALE_CHARGE": "fees", "DISPUTE": "claims"}
+
+
+@app.get("/api/payouts")
+def payouts(request: Request):
+    need_user(request)
+    with DB.db() as con:
+        parts = {}
+        for r in con.execute("SELECT account_id,payout_id,type,fee_type,SUM(amount) s,COUNT(*) n FROM payout_lines GROUP BY 1,2,3,4"):
+            d = parts.setdefault((r["account_id"], r["payout_id"]), {"sales": 0, "refunds": 0, "labels": 0, "fees": 0, "ads": 0, "claims": 0, "other": 0, "orders": 0})
+            k = "ads" if r["fee_type"] == "AD_FEE" else PAYOUT_PARTS.get(r["type"], "other")
+            d[k] = round(d[k] + (r["s"] or 0), 2)
+            if r["type"] == "SALE":
+                d["orders"] += r["n"]
+        rows = []
+        for r in con.execute("SELECT account_id,payout_id,date,status,amount,currency,tx_count,instrument,last4,bank_ref,banked,banked_by,banked_at,note FROM payouts ORDER BY date DESC"):
+            d = dict(r)
+            d["parts"] = parts.get((r["account_id"], r["payout_id"]))
+            rows.append(d)
+        state = [dict(r) for r in con.execute("""SELECT a.id,a.name,s.last_check,s.last_status,s.last_message FROM accounts a
+            JOIN ebay_tokens t ON t.account_id=a.id LEFT JOIN payout_state s ON s.account_id=a.id ORDER BY a.sort,a.id""")]
+    return {"rows": rows, "state": state}
+
+
+@app.post("/api/payouts/banked")
+async def payouts_banked(request: Request):
+    u = need_user(request)
+    b = await request.json()
+    with DB.db() as con:
+        for it in b.get("items") or []:
+            on = 1 if it.get("banked", True) else 0
+            con.execute("UPDATE payouts SET banked=?, banked_by=?, banked_at=CASE WHEN ? THEN datetime('now') ELSE NULL END, note=COALESCE(?, note) WHERE account_id=? AND payout_id=?",
+                        (on, u["email"] if on else None, on, it.get("note"), int(it["account_id"]), str(it["payout_id"])))
+    return {"ok": True}
+
+
+@app.post("/api/payouts/check")
+def payouts_check(request: Request):
+    need_user(request)
+    import threading
+    threading.Thread(target=PO.check, args=(DB.db,), daemon=True).start()
     return {"ok": True}
 
 
