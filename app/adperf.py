@@ -131,7 +131,8 @@ def run_report(token, cids, date_from, date_to):
     body = {"reportType": "LISTING_PERFORMANCE_REPORT", "marketplaceId": "EBAY_GB", "campaignIds": cids,
             "fundingModels": ["COST_PER_SALE"],
             "dateFrom": date_from + "T00:00:00.000Z", "dateTo": date_to + "T23:59:59.000Z",
-            "dimensions": [{"dimensionKey": "listing_id"}], "metricKeys": metrics, "reportFormat": "TSV_GZIP"}
+            "dimensions": [{"dimensionKey": "listing_id"}, {"dimensionKey": "campaign_id"}],  # eBay requires both
+            "metricKeys": metrics, "reportFormat": "TSV_GZIP"}
     st, b, h = _req("POST", f"{MKT}/ad_report_task", token, body)
     if st >= 400:
         _json(st, b, "Asking eBay for the ad report")
@@ -167,11 +168,20 @@ def run_report(token, cids, date_from, date_to):
     lid = next((i for i, x in enumerate(head) if x in ("listing_id", "item_id", "listingid")), None)
     if lid is None:
         lid = next((i for i, x in enumerate(head) if "listing" in x and "id" in x), 0)
+    # one row per listing and campaign: add the numbers up per listing
+    skip = {i for i, x in enumerate(head) if i == lid or "campaign" in x or "listing" in x or x in ("title", "item_title")}
     out = {}
     for r in rows[1:]:
         if len(r) <= lid or not r[lid].strip().isdigit():
             continue
-        out[r[lid].strip()] = {head[i]: r[i] for i in range(min(len(head), len(r))) if i != lid}
+        acc = out.setdefault(r[lid].strip(), {})
+        for i in range(min(len(head), len(r))):
+            if i in skip:
+                continue
+            acc[head[i]] = acc.get(head[i], 0.0) + _num(r[i])
+    for acc in out.values():
+        if "click_through_rate" in acc:
+            acc.pop("click_through_rate")  # a rate can't be added up across campaigns
     return out, metrics
 
 
@@ -225,7 +235,7 @@ def refresh(db_factory, account_id):
             for item, vals in rows.items():
                 e = _extract(vals, metrics)
                 con.execute("INSERT INTO ad_perf VALUES(?,?,?,?,?,?,?,?,?)", (account_id, w, item, e["impressions"], e["clicks"],
-                            e["ad_units"], e["ad_sales"], e["ad_fees"], json.dumps(vals)))
+                            e["ad_units"], round(e["ad_sales"], 2), round(e["ad_fees"], 2), json.dumps(vals)))
         con.execute("INSERT OR REPLACE INTO ad_perf_state(account_id,fetched_at,status,message,date_to) VALUES(?,?,?,?,?)",
                     (account_id, now_iso(), "ok", f"{len(cur)} promoted listings; report for {len(got[30][0])} listings (30 days)", end))
 
