@@ -112,9 +112,15 @@ def _basic():
 
 
 def _token_request(form):
-    st, body = _http(TOKEN_URL, urllib.parse.urlencode(form).encode(),
-                     {"Content-Type": "application/x-www-form-urlencoded", "Authorization": _basic()}, "POST")
-    j = json.loads(body or b"{}")
+    try:
+        st, body = _http(TOKEN_URL, urllib.parse.urlencode(form).encode(),
+                         {"Content-Type": "application/x-www-form-urlencoded", "Authorization": _basic()}, "POST")
+    except OSError as e:
+        raise EbayError(f"Couldn't reach eBay to renew the login ({e}). Try again in a minute.")
+    try:
+        j = json.loads(body or b"{}")
+    except ValueError:
+        raise EbayError(f"eBay gave an unreadable answer when renewing the login ({st}). Try again in a minute.")
     if st != 200:
         raise EbayError(j.get("error_description") or j.get("error") or f"eBay login failed ({st}).")
     return j

@@ -9,10 +9,13 @@ const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).
 const $ = id => document.getElementById(id);
 function toast(msg) { const t = $('toast'); t.textContent = msg; t.hidden = false; clearTimeout(toast.h); toast.h = setTimeout(() => t.hidden = true, Math.max(3200, msg.length * 60)); }
 async function api(url, opt = {}) {
-  const r = await fetch(url, opt);
+  let r;
+  try { r = await fetch(url, opt); } catch (e) { throw new Error('Couldn\'t reach Partsledger. Check your internet connection and try again.'); }
   if (r.status === 401) { location.href = '/login'; throw new Error('login'); }
   const j = r.headers.get('content-type')?.includes('json') ? await r.json() : {};
-  if (!r.ok) throw new Error(j.error || 'Something went wrong.');
+  if (!r.ok) throw new Error(j.error || ([502, 503, 504].includes(r.status)
+    ? 'Partsledger is restarting after an update. Wait a minute and try again; nothing was changed.'
+    : `Something went wrong (error ${r.status}). Please send a screenshot.`));
   return j;
 }
 const post = (url, body) => api(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });

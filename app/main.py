@@ -872,3 +872,12 @@ async def http_err(request: Request, exc: HTTPException):
 @app.exception_handler(EB.EbayError)
 async def ebay_err(request: Request, exc: EB.EbayError):
     return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.exception_handler(Exception)
+async def any_err(request: Request, exc: Exception):
+    """Anything unexpected: say what it was (instead of a bare 500) and keep it in the server log."""
+    import logging
+    import traceback
+    logging.getLogger("partsledger").error("Error on %s %s\n%s", request.method, request.url.path, traceback.format_exc())
+    return JSONResponse({"error": f"Server error on {request.url.path}: {type(exc).__name__}: {str(exc)[:300]}"}, status_code=500)
