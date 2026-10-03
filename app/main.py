@@ -19,6 +19,7 @@ from . import edits as ED
 from . import stock as ST
 from . import messages as MS
 from . import adperf as AP
+from . import returns as RT
 from .auth import check_pw, ensure_admin, hash_pw
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -39,6 +40,7 @@ def startup():
         con.executescript(ST.SCHEMA)
         con.executescript(MS.SCHEMA)
         con.executescript(AP.SCHEMA)
+        con.executescript(RT.SCHEMA)
         AP.migrate(con)
         con.execute("UPDATE ad_changes SET status='failed', message='Stopped by a restart; try again' WHERE status='waiting'")
         con.execute("UPDATE edit_jobs SET status='stopped' WHERE status IN ('queued','running')")
@@ -51,6 +53,7 @@ def startup():
         ST.start_scheduler(DB.db)
         MS.start_scheduler(DB.db)
         AP.start_scheduler(DB.db)
+        RT.start_scheduler(DB.db)
 
 
 def uk_today():
@@ -661,6 +664,33 @@ async def ads_apply(request: Request):
     import threading
     threading.Thread(target=AP.apply, args=(DB.db, ids), daemon=True).start()
     return {"queued": len(ids)}
+
+
+# ------------------------------------------------------------------ returns
+@app.get("/api/returns")
+def returns(request: Request):
+    need_user(request)
+    with DB.db() as con:
+        sku_map = {r["item_id"]: r["sku"] for r in con.execute("SELECT item_id,sku FROM sku_map")}
+        lsku = {(r["account_id"], r["item_id"]): (r["sku"], r["title"]) for r in con.execute("SELECT account_id,item_id,sku,title FROM listings")}
+        rows = []
+        for r in con.execute("SELECT account_id,kind,rid,order_id,item_id,transaction_id,buyer,reason,reason_type,comments,state,status,created,refund,qty FROM returns ORDER BY created DESC"):
+            d = dict(r)
+            l = lsku.get((d["account_id"], d["item_id"])) or (None, None)
+            d["sku"] = sku_map.get(d["item_id"]) or l[0]
+            d["title"] = l[1]
+            rows.append(d)
+        state = [dict(r) for r in con.execute("""SELECT a.id,a.name,s.last_check,s.last_status,s.last_message FROM accounts a
+            JOIN ebay_tokens t ON t.account_id=a.id LEFT JOIN returns_state s ON s.account_id=a.id ORDER BY a.sort,a.id""")]
+    return {"rows": rows, "state": state}
+
+
+@app.post("/api/returns/check")
+def returns_check(request: Request):
+    need_user(request)
+    import threading
+    threading.Thread(target=RT.check, args=(DB.db,), daemon=True).start()
+    return {"ok": True}
 
 
 # ------------------------------------------------------------------ log

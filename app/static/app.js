@@ -1098,6 +1098,98 @@ $('adApply').onclick = async () => {
   } catch (e) { toast(e.message); }
 };
 
+// ---------------------------------------------------------------- returns and cases
+let RTN = null;
+const rtState = { sort: { i: 2, asc: false }, limit: 200, render: () => drawReturns(), empty: 'No SKUs with returns in this period.' };
+const rtListState = { sort: null, limit: 100, render: () => drawReturns(), empty: 'Nothing for this selection.' };
+const RT_REASON = {
+  NOT_AS_DESCRIBED: 'Not as described', DEFECTIVE_ITEM: 'Faulty', ARRIVED_DAMAGED: 'Arrived damaged', DOES_NOT_FIT: "Doesn't fit",
+  WRONG_SIZE: "Doesn't fit", MISSING_PARTS: 'Missing parts', ORDERED_WRONG_ITEM: 'Ordered the wrong part', ORDERED_DIFFERENT_ITEM: 'Ordered the wrong part',
+  ORDERED_BY_MISTAKE: 'Ordered by mistake', NO_LONGER_NEED: 'No longer needed', NO_LONGER_NEEDED: 'No longer needed', FOUND_BETTER_PRICE: 'Found it cheaper',
+  CHANGED_MIND: 'Changed mind', BUYER_CANCEL_ORDER: 'Cancelled', EXPIRED_ITEM: 'Expired', FAKE_OR_COUNTERFEIT: 'Not genuine',
+  ITEM_NOT_RECEIVED: 'Not received', INR: 'Not received', SNAD: 'Not as described', RETURN: 'Return case', OTHER: 'Other',
+};
+const rtReason = r => RT_REASON[r.reason] || (r.reason ? r.reason.toLowerCase().replace(/_/g, ' ').replace(/^./, c => c.toUpperCase()) : 'No reason given');
+const rtSellerSide = r => r.kind !== 'return' || r.reason_type === 'SNAD' || ['NOT_AS_DESCRIBED', 'DEFECTIVE_ITEM', 'ARRIVED_DAMAGED', 'MISSING_PARTS', 'FAKE_OR_COUNTERFEIT', 'DOES_NOT_FIT', 'WRONG_SIZE'].includes(r.reason);
+const rtOpen = r => !/CLOSED|COMPLETED|REFUNDED|CANCELLED|CANCELED|RESOLVED|ESCALATED_CLOSED/i.test(`${r.state || ''} ${r.status || ''}`);
+async function renderReturns() {
+  try { RTN = await api('/api/returns'); } catch (e) { toast(e.message); return; }
+  const errs = RTN.state.filter(s => s.last_status === 'error');
+  const last = RTN.state.map(s => s.last_check).filter(Boolean).sort().pop();
+  $('rtStatus').innerHTML = RTN.state.length ? (last ? `Checked ${ago(last)} (every 3 hours). ` : 'First check runs within a few minutes. ') + RTN.state.map(s => s.last_message ? `${esc(s.name)}: ${s.last_status === 'error' ? '<span class="neg">' + esc(s.last_message) + '</span>' : esc(s.last_message)}` : '').filter(Boolean).join(' · ') : 'Connect your eBay accounts on the eBay page first.';
+  drawReturns();
+}
+function drawReturns() {
+  if (!RTN) return;
+  const f = F(); if ($('fPeriod').value === 'all') f.r = [f.r[0], TODAY];  // returns can be opened after the last sale
+  const [from, to] = f.r;
+  // the sale behind each return, from the money data
+  const byOrder = new Map(); I.forEach(x => { const k = ACC[x.a].id + '|' + x.o; (byOrder.get(k) || byOrder.set(k, []).get(k)).push(x); });
+  const rows = RTN.rows.map(r => {
+    const sale = (byOrder.get(r.account_id + '|' + r.order_id) || []).filter(x => !r.item_id || x.id === r.item_id);
+    const sku = r.sku || (sale[0] && sale[0].sku) || '', g = sale[0] ? sale[0].g : (sku ? (sku.match(/^[A-Za-z]+/) || [''])[0].toUpperCase().replace(/^MRR.*/, 'MRR') : 'NO SKU');
+    return { ...r, a: AIDX[r.account_id], sku, g: g || 'NO SKU', title: r.title || (sale[0] && sale[0].t) || '', sale, net: sale.length ? sale.reduce((t, x) => t + profitOf(x), 0) : null, d: (r.created || '').slice(0, 10) };
+  }).filter(r => r.a !== undefined && f.a.has(r.a) && (f.allG || f.g.has(r.g)) && r.d >= from && r.d <= to);
+  const sold = itemsIn(f, f.r);
+  const unitsBySku = new Map(), unitsByG = new Map(); let units = 0;
+  sold.forEach(x => { units += x.q; unitsBySku.set(x.sku, (unitsBySku.get(x.sku) || 0) + x.q); unitsByG.set(x.g, (unitsByG.get(x.g) || 0) + x.q); });
+  const ret = rows.filter(r => r.kind === 'return'), inr = rows.filter(r => r.kind === 'inquiry'), cases = rows.filter(r => r.kind === 'case');
+  const retUnits = ret.reduce((t, r) => t + (r.qty || 1), 0), refunded = rows.reduce((t, r) => t + (r.refund || 0), 0);
+  const netAll = rows.reduce((t, r) => t + (r.net || 0), 0);
+  const stat = (k, v, sub, c = '') => `<div class="stat"><small>${k}</small><b class="${c}">${v}</b>${sub ? `<span>${sub}</span>` : ''}</div>`;
+  $('rtStats').innerHTML = stat('Returns', n0(ret.length), `${n0(ret.filter(rtOpen).length)} still open`) + stat('Return rate', pct(units ? retUnits / units : NaN), `of ${n0(units)} units sold`) +
+    stat('Refunded', gbp(refunded), 'to buyers') + stat('Net on those sales', gbp(netAll), 'returns with a matched sale', cls(netAll)) +
+    stat('Not received', n0(inr.length), `${n0(inr.filter(rtOpen).length)} open`) + stat('Cases', n0(cases.length), `${n0(cases.filter(rtOpen).length)} open`);
+  // reasons
+  const rc = new Map(); rows.forEach(r => { const k = rtReason(r), o = rc.get(k) || { n: 0, seller: rtSellerSide(r) }; o.n++; rc.set(k, o); });
+  const rlist = [...rc.entries()].sort((a, b) => b[1].n - a[1].n), max = Math.max(1, ...rlist.map(x => x[1].n));
+  const sellerN = rows.filter(rtSellerSide).length;
+  $('rtReasonSub').innerHTML = rows.length ? `<span class="neg">Red</span>: part or listing problem (${n0(sellerN)}). Orange: buyer's choice (${n0(rows.length - sellerN)}).` : '';
+  $('rtReasons').innerHTML = rlist.length ? rlist.map(([k, o]) => `<div class="bar"><span>${esc(k)}</span><span class="track"><span class="fill ${o.seller ? 'seller' : ''}" style="width:${o.n / max * 100}%;display:block"></span></span><span>${n0(o.n)} · ${pct(o.n / rows.length)}</span></div>`).join('') : '<p class="empty">No returns in this period.</p>';
+  // by group
+  const gm = new Map(); rows.forEach(r => { const o = gm.get(r.g) || { g: r.g, n: 0, ret: 0, other: 0, ref: 0, net: 0 }; o.n++; if (r.kind === 'return') o.ret += r.qty || 1; else o.other++; o.ref += r.refund || 0; o.net += r.net || 0; gm.set(r.g, o); });
+  const groupsRows = [...gm.values()].map(o => ({ ...o, units: unitsByG.get(o.g) || 0 })).sort((a, b) => a.net - b.net);
+  $('rtGroups').innerHTML = groupsRows.length ? `<thead><tr><th class="l">Group</th><th>Sold</th><th>Returns</th><th>Rate</th><th>Not received / cases</th><th>Refunded</th><th>Net on those sales</th></tr></thead><tbody>${groupsRows.map(o => `<tr>
+    <td class="l"><span class="sku">${esc(o.g)}</span></td><td>${n0(o.units)}</td><td>${n0(o.ret)}</td><td>${o.units ? `<span class="${o.ret / o.units >= 0.1 ? 'neg' : ''}">${pct(o.ret / o.units)}</span>` : '–'}</td><td>${n0(o.other)}</td><td>${gbp(o.ref)}</td><td>${money(o.net)}</td></tr>`).join('')}</tbody>`
+    : '<tbody><tr><td class="empty">No returns in this period.</td></tr></tbody>';
+  // by SKU
+  const q = $('rtSearch').value.trim().toLowerCase();
+  const sm = new Map(); rows.forEach(r => { const k = r.sku || 'No SKU: ' + (r.title || r.item_id); const o = sm.get(k) || { sku: k, t: r.title, g: r.g, n: 0, ret: 0, other: 0, ref: 0, net: 0, reasons: new Map() }; o.n++; if (r.kind === 'return') o.ret += r.qty || 1; else o.other++; o.ref += r.refund || 0; o.net += r.net || 0; o.reasons.set(rtReason(r), (o.reasons.get(rtReason(r)) || 0) + 1); sm.set(k, o); });
+  const skuRows = [...sm.values()].map(o => ({ ...o, units: unitsBySku.get(o.sku) || 0, top: [...o.reasons.entries()].sort((a, b) => b[1] - a[1])[0] }))
+    .filter(o => !q || o.sku.toLowerCase().includes(q) || (o.t || '').toLowerCase().includes(q));
+  $('rtSkuSub').textContent = `${n0(skuRows.length)} SKUs with a return, request or case · ${nice(from)} – ${nice(to)}. Flagged: 10%+ return rate with 2 or more returns.`;
+  table($('rtSkus'), [
+    { h: 'SKU', l: 1, cl: 'prod', v: o => o.sku, f: o => `<span class="t">${esc(o.t || o.sku)}</span><span class="s">${esc(o.sku)}</span>` },
+    { h: 'Sold', v: o => o.units, f: o => n0(o.units) },
+    { h: 'Returns', v: o => o.ret, f: o => n0(o.ret) },
+    { h: 'Not received / cases', v: o => o.other, f: o => n0(o.other) },
+    { h: 'Rate', v: o => o.units ? o.ret / o.units : -1, f: o => o.units ? `<span class="${o.ret / o.units >= 0.1 ? 'neg' : ''}">${pct(o.ret / o.units)}</span>` : '–' },
+    { h: 'Main reason', l: 1, v: o => o.top ? o.top[0] : '', f: o => o.top ? `${esc(o.top[0])}${o.reasons.size > 1 ? ` <span class="sub">+${o.reasons.size - 1} other</span>` : ''}` : '' },
+    { h: 'Refunded', v: o => o.ref, f: o => gbp(o.ref) },
+    { h: 'Net on those sales', v: o => o.net, f: o => money(o.net) },
+    { h: '', l: 1, v: o => o.units && o.ret / o.units >= 0.1 && o.ret >= 2 ? 1 : 0, f: o => o.units && o.ret / o.units >= 0.1 && o.ret >= 2 ? '<span class="chip m">Check listing</span>' : '' }], skuRows, null, rtState);
+  // every return
+  const kf = $('rtKind').value;
+  const list = rows.filter(r => !kf || (kf === 'open' ? rtOpen(r) : r.kind === kf)).filter(r => !q || r.sku.toLowerCase().includes(q) || (r.title || '').toLowerCase().includes(q));
+  table($('rtList'), [
+    { h: 'Opened', l: 1, v: r => r.created, f: r => nice(r.d) },
+    { h: 'Account', l: 1, v: r => r.account_id, f: r => `<span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)}` },
+    { h: 'Type', l: 1, v: r => r.kind, f: r => `<span class="chip ${r.kind === 'case' ? 'm' : r.kind === 'inquiry' ? 'ret' : 'b'}">${{ return: 'Return', inquiry: 'Not received', case: 'Case' }[r.kind]}</span>` },
+    { h: 'Listing', l: 1, cl: 'prod', v: r => r.sku, f: r => `<span class="t">${esc(r.title || r.item_id || '')}</span><span class="s">${esc(r.sku || 'No SKU')} · buyer ${esc(r.buyer || '–')}${r.order_id ? ` · <a href="https://www.ebay.co.uk/sh/ord/details?orderid=${encodeURIComponent(r.order_id)}" target="_blank" rel="noopener">order</a>` : ''}</span>` },
+    { h: 'Reason', l: 1, cl: 'prod', v: r => rtReason(r), f: r => `<span class="${rtSellerSide(r) ? 'neg' : ''}">${esc(rtReason(r))}</span>${r.comments ? `<span class="cmt">"${esc(r.comments.slice(0, 220))}"</span>` : ''}` },
+    { h: 'Status', l: 1, v: r => r.state || '', f: r => `${rtOpen(r) ? '<span class="chip ret">Open</span> ' : ''}<span class="sub">${esc(((r.state || r.status || '') + '').toLowerCase().replace(/_/g, ' '))}</span>` },
+    { h: 'Refund', v: r => r.refund || 0, f: r => r.refund ? gbp(r.refund) : '–' },
+    { h: 'Net on the sale', v: r => r.net ?? 0, f: r => r.net != null ? money(r.net) : `<span class="muted" title="${r.order_id ? 'This sale is outside the loaded data' : 'eBay doesn\'t say which order this belongs to'}">–</span>` }], list, null, rtListState);
+  $('rtMore').hidden = list.length <= rtListState.limit;
+  rtListState.csv = list;
+}
+$('rtCheck').onclick = async () => { try { await api('/api/returns/check', { method: 'POST' }); toast('Checking eBay for returns and cases…'); setTimeout(renderReturns, 15000); } catch (e) { toast(e.message); } };
+$('rtSearch').addEventListener('input', drawReturns);
+$('rtKind').addEventListener('change', drawReturns);
+$('rtMore').onclick = () => { rtListState.limit += 200; drawReturns(); };
+$('rtCsv').onclick = () => csv('returns.csv', ['Opened', 'Account', 'Type', 'Order', 'Item number', 'SKU', 'Title', 'Buyer', 'Reason', 'Buyer comment', 'Status', 'Refund', 'Net on the sale'],
+  (rtListState.csv || []).map(r => [r.created, ACC[r.a].name, r.kind, r.order_id || '', r.item_id || '', r.sku, r.title, r.buyer || '', rtReason(r), r.comments || '', r.state || r.status || '', r.refund ?? '', r.net != null ? r.net.toFixed(2) : '']));
+
 // ---------------------------------------------------------------- eBay
 let EBS = null, cpRows = [], jobTimer = null;
 async function renderEbay() {
@@ -1210,7 +1302,7 @@ $('adFile').onchange = async e => {
 };
 
 // ---------------------------------------------------------------- wiring
-const titles = { dash: 'Dashboard', orders: 'Sold items', traffic: 'Traffic', edit: 'Bulk edit', stock: 'Stock sync', msgs: 'Messages', ads: 'Ads', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
+const titles = { dash: 'Dashboard', orders: 'Sold items', traffic: 'Traffic', edit: 'Bulk edit', stock: 'Stock sync', msgs: 'Messages', ads: 'Ads', returns: 'Returns', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
 let page = 'dash';
 function show(p) {
   page = p; document.querySelectorAll('[data-p]').forEach(s => s.hidden = s.id !== 'p-' + p);
@@ -1230,6 +1322,7 @@ function renderAll() {
   if (page === 'stock') renderStock();
   if (page === 'msgs') renderMsgs(true);
   if (page === 'ads') renderAds2();
+  if (page === 'returns') renderReturns();
   if (page === 'cogs') { renderBands(); renderCogs(); }
   if (page === 'charts') renderCharts();
   if (page === 'uploads') renderUploads();
