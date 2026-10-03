@@ -918,16 +918,18 @@ $('msCheck').onclick = async () => { try { await api('/api/messages/check', { me
 setInterval(() => { if (page === 'msgs' && MSG && !document.hidden && !($('msText') && document.activeElement === $('msText'))) renderMsgs(true); }, 120000);
 
 // ---------------------------------------------------------------- Promoted Listings performance
+let adViews = null;
 let ADS = null, adFlag = 'sugg', adOff = new Set(), adOn = new Set(), adRateTyped = new Map(), adRowsCache = [];
 const adState = { sort: null, limit: 150, render: () => drawAds(), empty: 'No listings match.' };
 const AD_ACT = {
   stop: { name: 'Stop', chip: 'm' }, lower: { name: 'Lower', chip: 'ret' }, raise: { name: 'Raise', chip: 'b' },
-  start: { name: 'Start', chip: 'b' }, keep: { name: 'Keep', chip: 'k' }, none: { name: 'No change', chip: '' },
+  start: { name: 'Start', chip: 'b' }, keep: { name: 'Keep', chip: 'k' }, organic: { name: 'Sells without ads', chip: 'k' }, none: { name: 'No change', chip: '' },
 };
 async function renderAds2() {
   try {
     const w = $('adWin').value;
-    [ADS] = await Promise.all([api('/api/ads?window=' + w), EL ? null : api('/api/edit/listings').then(r => { EL = r; })]);
+    [ADS] = await Promise.all([api('/api/ads?window=' + w), EL ? null : api('/api/edit/listings').then(r => { EL = r; }),
+      adViews ? null : api(`/api/traffic?start=${addD(TODAY, -30)}&end=${addD(TODAY, -1)}`).then(td => { adViews = new Map(td.rows.map(r => [r[0] + '|' + r[1], r[10]])); adViews.has_data = td.rows.length > 0; }).catch(() => { adViews = new Map(); })]);
   } catch (e) { toast(e.message); return; }
   const st = ADS.state;
   $('adStatus').innerHTML = st.length ? st.map(a => `${esc(a.name)}: ${a.fetched_at ? (a.status === 'error' ? '<span class="neg">' + esc(a.message) + '</span>' : `updated ${ago(a.fetched_at)} · ${esc(a.message || '')}`) : 'first report within the hour'}`).join('<br>')
@@ -936,6 +938,7 @@ async function renderAds2() {
 }
 function adRows() {
   const f = F(), w = +$('adWin').value, from = addD(TODAY, -w), pf = edProfitFn();
+  const orgU = Math.max(0, +$('adOrgU').value || 0), orgV = Math.max(0, +$('adOrgV').value || 0);
   const minP = +$('adMinP').value || 0, lo = +$('adLo').value || 2, hi = +$('adHi').value || 15, step = +$('adStep').value || 2, startAt = +$('adStart').value || 5;
   const cur = new Map(), perf = new Map(), own = new Map();
   ADS.current.forEach(c => { if (c[4] === 'COST_PER_SALE') cur.set(c[0] + '|' + c[1], { cid: c[2], cname: c[3], rate: c[5], status: c[6], dyn: c[7] === 'DYNAMIC' }); });
@@ -961,6 +964,8 @@ function adRows() {
       else if (adU === 0 && p && p.imp < 200 && rate + 0.05 < Math.min(maxRate, hi)) { act = 'raise'; nr = r1(Math.min(rate + step, maxRate, hi)); why = `Hardly shown in ads (${n0(p.imp)} impressions); ${nr}% still leaves ${gbp(base - L.price * nr / 100)}`; }
       else if (adU === 0 && p && p.clicks >= 30) { act = 'keep'; why = `${n0(p.clicks)} ad clicks but no sale: check price, photos or fitment`; }
       else { act = 'keep'; why = adU ? `${n0(adU)} ad sales, each leaving about ${gbp(profitNow)}` : 'No ad sales yet; an ad costs nothing until it sells'; }
+    } else if (Math.max(0, o.u - adU) >= Math.max(1, orgU) && (!adViews || !adViews.has_data || (adViews.get(k) || 0) >= orgV)) {
+      act = 'organic'; why = `Sold ${n0(Math.max(0, o.u - adU))} without ads in ${w} days` + (adViews && adViews.has_data ? ` with ${n0(adViews.get(k) || 0)} views in 30 days` : '') + ', so no ad suggested';
     } else if (maxRate >= lo) { act = 'start'; nr = r1(Math.max(lo, Math.min(startAt, maxRate, hi))); why = `Not promoted. ${nr}% still leaves ${gbp(base - L.price * nr / 100)} per sale`; }
     else { act = 'none'; why = `Not promoted. Margin too thin: below ${lo}% would be needed`; }
     if (c && c.dyn && nr != null && act !== 'stop') why += `. eBay sets rates itself in "${c.cname}", so this moves it to ${'Partsledger General'} at a fixed rate`;
@@ -979,7 +984,7 @@ function drawAds() {
   $('adStats').innerHTML = stat('Ad fees', gbp(T.fees), `last ${$('adWin').value} days`) + stat('Ad sales', gbp(T.adS), `${n0(T.adU)} units`) +
     stat('Return on ads', T.fees ? (T.adS / T.fees).toFixed(1) + '×' : '–', 'ad sales ÷ ad fees') + stat('Sold through ads', pct(T.u ? T.adU / T.u : NaN), `of ${n0(T.u)} units sold`) +
     stat('Ad clicks', n0(T.cl), `${n0(T.imp)} ad impressions`) + stat('Promoted', n0(T.prom), `${n0(sugg)} suggestions`);
-  const fb = [['sugg', 'Suggested changes', sugg], ['all', 'All listings', all.length], ...['stop', 'lower', 'raise', 'start', 'keep'].map(k => [k, AD_ACT[k].name, cnt[k] || 0])];
+  const fb = [['sugg', 'Suggested changes', sugg], ['all', 'All listings', all.length], ...['stop', 'lower', 'raise', 'start', 'organic', 'keep'].map(k => [k, AD_ACT[k].name, cnt[k] || 0])];
   $('adFlags').innerHTML = fb.map(([k, n, c]) => `<button type="button" data-af="${k}" aria-pressed="${adFlag === k}">${n} <em>${n0(c)}</em></button>`).join('');
   $('adFlags').querySelectorAll('[data-af]').forEach(b => b.onclick = () => { adFlag = b.dataset.af; adState.limit = 150; drawAds(); });
   const rows = all.filter(r => (adFlag === 'all' || (adFlag === 'sugg' ? ['stop', 'lower', 'raise', 'start'].includes(r.act) : r.act === adFlag)) &&
@@ -1025,7 +1030,7 @@ function drawAdLog() {
     <td class="l prod">${c.status === 'done' ? '<span class="chip k">Done</span> ' : c.status === 'failed' ? '<span class="chip m">Failed</span> ' : '<span class="chip b">Waiting</span> '}${esc(c.message || '')}</td></tr>`).join('')}</tbody>` : '<tbody><tr><td class="empty">No ad changes sent yet.</td></tr></tbody>';
   if (ADS.changes.some(c => c.status === 'waiting')) setTimeout(async () => { if (page === 'ads') { ADS = await api('/api/ads?window=' + $('adWin').value); drawAds(); drawAdLog(); } }, 3000);
 }
-['adMinP', 'adLo', 'adHi', 'adStep', 'adStart'].forEach(id => $(id).addEventListener('change', () => drawAds()));
+['adMinP', 'adLo', 'adHi', 'adStep', 'adStart', 'adOrgU', 'adOrgV'].forEach(id => $(id).addEventListener('change', () => drawAds()));
 $('adWin').addEventListener('change', renderAds2);
 $('adSearch').addEventListener('input', () => { adState.limit = 150; drawAds(); });
 $('adMore').onclick = () => { adState.limit += 300; drawAds(); };
