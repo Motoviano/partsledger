@@ -269,3 +269,4 @@ a.btn{text-decoration:none;display:inline-block}
 .bar .fill.seller{background:var(--bad)}
 .bar span:last-child{text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)}
 .cmt{display:block;font-size:12px;color:var(--muted);font-style:italic;white-space:normal;max-width:320px}
+.form-row input[type=text]#ofMsg{min-height:36px}

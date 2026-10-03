@@ -1,4 +1,5 @@
 import json
+from collections import defaultdict
 import os
 import secrets
 import sqlite3
@@ -22,6 +23,7 @@ from . import adperf as AP
 from . import returns as RT
 from . import payouts as PO
 from . import titles as TL
+from . import offers as OF
 from .auth import check_pw, ensure_admin, hash_pw
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -45,6 +47,7 @@ def startup():
         con.executescript(RT.SCHEMA)
         con.executescript(PO.SCHEMA)
         con.executescript(TL.SCHEMA)
+        con.executescript(OF.SCHEMA)
         con.execute("UPDATE title_jobs SET status='stopped' WHERE status IN ('queued','running')")
         AP.migrate(con)
         con.execute("UPDATE ad_changes SET status='failed', message='Stopped by a restart; try again' WHERE status='waiting'")
@@ -60,6 +63,7 @@ def startup():
         AP.start_scheduler(DB.db)
         RT.start_scheduler(DB.db)
         PO.start_scheduler(DB.db)
+        OF.start_scheduler(DB.db)
 
 
 def uk_today():
@@ -697,6 +701,51 @@ def returns_check(request: Request):
     import threading
     threading.Thread(target=RT.check, args=(DB.db,), daemon=True).start()
     return {"ok": True}
+
+
+# ------------------------------------------------------------------ offers to interested buyers
+@app.get("/api/offers")
+def offers(request: Request):
+    need_user(request)
+    with DB.db() as con:
+        log = [dict(r) for r in con.execute("SELECT o.*, a.name AS account FROM offer_log o LEFT JOIN accounts a ON a.id=o.account_id ORDER BY o.id DESC LIMIT 300")]
+        state = [dict(r) for r in con.execute("""SELECT a.id,a.name,s.last_check,s.last_status,s.last_message FROM accounts a
+            JOIN ebay_tokens t ON t.account_id=a.id LEFT JOIN offer_state s ON s.account_id=a.id ORDER BY a.sort,a.id""")]
+        return {"settings": OF.get_settings(con), "state": state, "log": log}
+
+
+@app.post("/api/offers/find")
+def offers_find(request: Request):
+    need_user(request)
+    ids = OF.find_all(DB.db)
+    with DB.db() as con:
+        return {"rows": OF.plan(con, ids)}
+
+
+@app.post("/api/offers/send")
+async def offers_send(request: Request):
+    u = need_user(request)
+    b = await request.json()
+    want = defaultdict(list)
+    for r in (b.get("items") or [])[:500]:
+        want[int(r["account_id"])].append(str(r["item_id"]))
+    if not want:
+        raise HTTPException(400, "Tick at least one listing.")
+    with DB.db() as con:
+        rows = [r for r in OF.plan(con, dict(want)) if not r["skip"]]  # prices worked out again here, never taken from the browser
+    if not rows:
+        raise HTTPException(400, "None of the ticked listings can get an offer right now (see the notes).")
+    import threading
+    threading.Thread(target=OF.send_rows, args=(DB.db, rows), kwargs={"user": u["email"]}, daemon=True).start()
+    return {"queued": len(rows)}
+
+
+@app.post("/api/offers/settings")
+async def offers_settings(request: Request):
+    need_user(request)
+    b = await request.json()
+    with DB.db() as con:
+        return OF.set_settings(con, b)
 
 
 # ------------------------------------------------------------------ titles from fitment
