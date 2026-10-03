@@ -12,6 +12,7 @@ import threading
 import time
 
 from . import ebay as EB
+from . import db as DB
 
 N = EB.N
 SCHEMA = """
@@ -124,6 +125,7 @@ def check(db_factory):
                                    last_message=excluded.last_message,backfilled=1""",
                                 (a, now_iso(), "ok", f"{len(rows)} messages in the last {days} days, {new} new"))
             except Exception as e:
+                DB.log_exc("messages.check")
                 with db_factory() as con:
                     con.execute("""INSERT INTO message_state(account_id,last_check,last_status,last_message) VALUES(?,?,?,?)
                                    ON CONFLICT(account_id) DO UPDATE SET last_check=excluded.last_check,last_status=excluded.last_status,last_message=excluded.last_message""",
@@ -165,6 +167,7 @@ def start_scheduler(db_factory, every_minutes=10):
                 if EB.configured():
                     check(db_factory)
             except Exception:
+                DB.log_exc("messages.loop")
                 pass
             time.sleep(every_minutes * 60)
     threading.Thread(target=loop, daemon=True).start()

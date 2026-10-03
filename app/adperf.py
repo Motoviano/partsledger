@@ -20,6 +20,7 @@ import urllib.parse
 import urllib.request
 
 from . import ebay as EB
+from . import db as DB
 
 MKT = EB.MKT
 WINDOWS = (30, 90)
@@ -257,6 +258,7 @@ def refresh_all(db_factory, only_stale=False):
             try:
                 refresh(db_factory, a)
             except Exception as e:
+                DB.log_exc("adperf.refresh_all")
                 with db_factory() as con:
                     con.execute("""INSERT INTO ad_perf_state(account_id,fetched_at,status,message) VALUES(?,?,?,?)
                                    ON CONFLICT(account_id) DO UPDATE SET fetched_at=excluded.fetched_at,status=excluded.status,message=excluded.message""",
@@ -271,6 +273,7 @@ def start_scheduler(db_factory):
                 if EB.configured():
                     refresh_all(db_factory, only_stale=True)
             except Exception:
+                DB.log_exc("adperf.loop")
                 pass
             time.sleep(3600)
     threading.Thread(target=loop, daemon=True).start()
@@ -293,6 +296,7 @@ def apply(db_factory, change_ids):
                 with db_factory() as con:
                     tok = EB.access_token(con, a)
             except Exception as e:
+                DB.log_exc("adperf.apply")
                 _mark(db_factory, [r["id"] for r in rs], "failed", str(e))
                 continue
             groups = {}
@@ -341,10 +345,13 @@ def apply(db_factory, change_ids):
                                         con.execute("INSERT OR REPLACE INTO ad_current(account_id,item_id,campaign_id,campaign_name,funding,rate,status) VALUES(?,?,?,COALESCE((SELECT campaign_name FROM ad_current WHERE account_id=? AND item_id=? AND campaign_id=?),?),'COST_PER_SALE',?,'ACTIVE')",
                                                     (a, r["item_id"], cid, a, r["item_id"], cid, EB.CAMPAIGN_NAME if kind == "create" else None, r["new_rate"]))
                 except Exception as e:
+                    DB.log_exc("adperf.apply")
                     _mark(db_factory, [r["id"] for r in grp], "failed", str(e))
 
 
 def _mark(db_factory, ids, status, msg):
+    if status == "failed":
+        DB.log("warn", "ads", f"Ad change failed: {msg}")
     with db_factory() as con:
         for i in ids:
             con.execute("UPDATE ad_changes SET status=?, message=? WHERE id=?", (status, str(msg)[:500], i))
@@ -371,6 +378,7 @@ def move(db_factory, tok, a, from_cid, grp):
     try:
         to_cid = EB.find_or_create_campaign(tok)
     except Exception as e:
+        DB.log_exc("adperf.move")
         _mark(db_factory, [r["id"] for r in grp], "failed", str(e))
         return
     with db_factory() as con:

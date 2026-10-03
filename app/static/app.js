@@ -8,14 +8,24 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const $ = id => document.getElementById(id);
 function toast(msg) { const t = $('toast'); t.textContent = msg; t.hidden = false; clearTimeout(toast.h); toast.h = setTimeout(() => t.hidden = true, Math.max(3200, msg.length * 60)); }
+// Errors seen in the browser go to the server log; if the server is down they wait and go with the next request.
+const logQueue = [];
+function logBrowser(where, message, detail) { logQueue.push({ where, message: String(message).slice(0, 900), detail: String(detail || '').slice(0, 3000), at: new Date().toISOString() }); }
+function flushLog() { if (!logQueue.length) return; const entries = logQueue.splice(0, 20); fetch('/api/log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ entries }) }).catch(() => logQueue.unshift(...entries)); }
+window.addEventListener('error', e => { logBrowser('page', e.message, `${e.filename}:${e.lineno}:${e.colno}`); setTimeout(flushLog, 500); });
+window.addEventListener('unhandledrejection', e => { if (e.reason && e.reason.message === 'login') return; logBrowser('page', e.reason && e.reason.message || e.reason, e.reason && e.reason.stack); setTimeout(flushLog, 500); });
 async function api(url, opt = {}) {
   let r;
-  try { r = await fetch(url, opt); } catch (e) { throw new Error('Couldn\'t reach Partsledger. Check your internet connection and try again.'); }
+  try { r = await fetch(url, opt); } catch (e) { logBrowser(url, 'Network error: ' + e.message); throw new Error('Couldn\'t reach Partsledger. Check your internet connection and try again.'); }
   if (r.status === 401) { location.href = '/login'; throw new Error('login'); }
   const j = r.headers.get('content-type')?.includes('json') ? await r.json() : {};
-  if (!r.ok) throw new Error(j.error || ([502, 503, 504].includes(r.status)
-    ? 'Partsledger is restarting after an update. Wait a minute and try again; nothing was changed.'
-    : `Something went wrong (error ${r.status}). Please send a screenshot.`));
+  if (!r.ok) {
+    if (!j.error) logBrowser(`${(opt.method || 'GET')} ${url}`, `HTTP ${r.status} with no message (server down or restarting?)`);
+    throw new Error(j.error || ([502, 503, 504].includes(r.status)
+      ? 'Partsledger is restarting after an update. Wait a minute and try again; nothing was changed.'
+      : `Something went wrong (error ${r.status}). Please send a screenshot.`));
+  }
+  if (logQueue.length) setTimeout(flushLog, 0);
   return j;
 }
 const post = (url, body) => api(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -347,6 +357,23 @@ $('addUser').onsubmit = async e => {
 };
 $('myPw').onsubmit = async e => { e.preventDefault(); try { await post(`/api/users/${ME.id}/password`, { password: $('myNewPw').value }); toast('Your password was changed'); e.target.reset(); } catch (err) { toast(err.message); } };
 $('backupBtn').onclick = () => { location.href = '/api/backup'; };
+// ---------------------------------------------------------------- log (admins)
+async function renderLog() {
+  if (!ME || !ME.is_admin) { $('logPanel').hidden = true; return; }
+  $('logPanel').hidden = false;
+  let L; try { L = await api(`/api/logs?level=${$('logLevel').value}&q=${encodeURIComponent($('logSearch').value)}&days=${$('logDays').value}`); } catch (e) { toast(e.message); return; }
+  const c = L.last24h || {};
+  $('logSub').textContent = `Last 24 hours: ${c.error || 0} errors, ${c.warn || 0} refused actions, ${c.browser || 0} browser errors. Kept 90 days.` + (L.readKey ? ' Read-only key is on.' : '');
+  $('logTable').innerHTML = L.rows.length ? `<thead><tr><th class="l">When (UTC)</th><th class="l">Type</th><th class="l">Where</th><th class="l">What happened</th></tr></thead><tbody>${L.rows.map((r, i) => `<tr>
+    <td class="l" style="white-space:nowrap">${esc(r.at)}</td><td class="l"><span class="chip ${{ error: 'm', warn: 'ret', browser: 'b', info: 'k' }[r.level] || ''}">${esc({ error: 'Error', warn: 'Refused', browser: 'Browser', info: 'Info' }[r.level] || r.level)}</span></td>
+    <td class="l"><span class="sku">${esc(r.source)}</span>${r.user_email ? `<span class="sub">${esc(r.user_email)}</span>` : ''}</td>
+    <td class="l prod">${esc(r.message)}${r.detail ? ` <button class="link" type="button" data-ld="${i}">Details</button><pre class="logd" id="ld${i}" hidden>${esc(r.detail)}</pre>` : ''}</td></tr>`).join('')}</tbody>`
+    : '<tbody><tr><td class="empty">Nothing logged for this filter.</td></tr></tbody>';
+  $('logTable').querySelectorAll('[data-ld]').forEach(b => b.onclick = () => { const p = $('ld' + b.dataset.ld); p.hidden = !p.hidden; });
+}
+['logLevel', 'logDays'].forEach(id => $(id).addEventListener('change', renderLog));
+$('logSearch').addEventListener('input', () => { clearTimeout(renderLog.t); renderLog.t = setTimeout(renderLog, 300); });
+$('logDl').onclick = () => { window.open(`/api/logs.txt?days=${$('logDays').value}&level=${$('logLevel').value}`, '_blank'); };
 
 
 // ---------------------------------------------------------------- traffic
@@ -1189,7 +1216,7 @@ function renderAll() {
   if (page === 'cogs') { renderBands(); renderCogs(); }
   if (page === 'charts') renderCharts();
   if (page === 'uploads') renderUploads();
-  if (page === 'users') renderUsers();
+  if (page === 'users') { renderUsers(); renderLog(); }
   if (page === 'ebay') renderEbay();
 }
 ['fPeriod', 'fFrom', 'fTo'].forEach(id => $(id).addEventListener('change', () => { ordState.limit = 100; activeTile = null; renderAll(); }));

@@ -44,6 +44,8 @@ def startup():
         con.execute("UPDATE edit_jobs SET status='stopped' WHERE status IN ('queued','running')")
         con.execute("UPDATE ebay_jobs SET status='stopped' WHERE status IN ('queued','running')")
         ensure_admin(con)
+        DB.purge_log(con)
+    DB.log("info", "app", "Partsledger started")
     if os.environ.get("DISABLE_SYNC") != "1":
         EB.start_scheduler(DB.db)
         ST.start_scheduler(DB.db)
@@ -659,6 +661,58 @@ async def ads_apply(request: Request):
     return {"queued": len(ids)}
 
 
+# ------------------------------------------------------------------ log
+def _log_rows(con, level="", q="", days=90, limit=500):
+    sql, args = "SELECT l.*, u.email AS user_email FROM app_log l LEFT JOIN users u ON u.id=l.user WHERE l.at >= datetime('now', ?)", [f"-{max(1, min(days, 90))} days"]
+    if level:
+        sql += " AND l.level=?"; args.append(level)
+    if q:
+        sql += " AND (l.message LIKE ? OR l.source LIKE ? OR l.detail LIKE ?)"; args += [f"%{q}%"] * 3
+    sql += " ORDER BY l.id DESC LIMIT ?"; args.append(limit)
+    return [dict(r) for r in con.execute(sql, args)]
+
+
+@app.get("/api/logs")
+def logs(request: Request, level: str = "", q: str = "", days: int = 30):
+    need_admin(request)
+    with DB.db() as con:
+        DB.purge_log(con)
+        rows = _log_rows(con, level, q, days, 500)
+        counts = {r[0]: r[1] for r in con.execute("SELECT level, COUNT(*) FROM app_log WHERE at >= datetime('now','-1 day') GROUP BY level")}
+    return {"rows": rows, "last24h": counts, "readKey": bool(os.environ.get("LOG_READ_KEY"))}
+
+
+@app.get("/api/logs.txt")
+def logs_file(request: Request, key: str = "", days: int = 14, level: str = ""):
+    """The log as a plain text file. Admins can download it; with LOG_READ_KEY set in Render it can also be
+    read with ?key=... (read-only, errors and events only: no tokens, passwords or buyer details)."""
+    rk = os.environ.get("LOG_READ_KEY", "")
+    if not (rk and key and secrets.compare_digest(key, rk)):
+        need_admin(request)
+    with DB.db() as con:
+        rows = _log_rows(con, level, "", days, 5000)
+    from fastapi.responses import PlainTextResponse
+    out = [f"Partsledger log · last {days} days · {len(rows)} entries · newest first", ""]
+    for r in rows:
+        out.append(f"[{r['at']} UTC] {r['level'].upper():5} {r['source']} · {r['message']}" + (f" · by {r['user_email']}" if r.get("user_email") else ""))
+        if r.get("detail"):
+            out += ["    " + x for x in r["detail"].rstrip().split("\n")[-25:]]
+    return PlainTextResponse("\n".join(out), headers={"Content-Disposition": f'inline; filename="partsledger-log-{date.today().isoformat()}.txt"'})
+
+
+@app.post("/api/log")
+async def log_from_browser(request: Request):
+    """Errors the browser saw (including ones the server couldn't log because it was restarting)."""
+    u = user(request)
+    if not u:
+        return {"ok": False}
+    b = await request.json()
+    for e in (b.get("entries") or [])[:20]:
+        DB.log("browser", str(e.get("where") or "page")[:80], str(e.get("message") or "")[:1000],
+               f"{e.get('at', '')} {e.get('detail') or ''}"[:4000], user=u["id"])
+    return {"ok": True}
+
+
 @app.get("/ebay/connect/{account_id}")
 def ebay_connect(account_id: int, request: Request):
     if not user(request):
@@ -866,11 +920,15 @@ async def ebay_deletion_notice(request: Request):
 
 @app.exception_handler(HTTPException)
 async def http_err(request: Request, exc: HTTPException):
+    # keep refusals of actions (and anything eBay refused) in the log; skip "please log in" and not-found
+    if exc.status_code >= 500 or (exc.status_code == 400 and (request.method != "GET" or request.url.path.startswith("/api/ebay"))):
+        DB.log("error" if exc.status_code >= 500 else "warn", f"{request.method} {request.url.path}", str(exc.detail), user=request.session.get("uid"))
     return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
 
 
 @app.exception_handler(EB.EbayError)
 async def ebay_err(request: Request, exc: EB.EbayError):
+    DB.log("warn", f"{request.method} {request.url.path}", str(exc), user=request.session.get("uid"))
     return JSONResponse({"error": str(exc)}, status_code=400)
 
 
@@ -880,4 +938,5 @@ async def any_err(request: Request, exc: Exception):
     import logging
     import traceback
     logging.getLogger("partsledger").error("Error on %s %s\n%s", request.method, request.url.path, traceback.format_exc())
+    DB.log("error", f"{request.method} {request.url.path}", f"{type(exc).__name__}: {exc}", traceback.format_exc(), user=request.session.get("uid"))
     return JSONResponse({"error": f"Server error on {request.url.path}: {type(exc).__name__}: {str(exc)[:300]}"}, status_code=500)

@@ -17,6 +17,7 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 
 from . import ebay as EB
+from . import db as DB
 
 N = EB.N
 
@@ -117,6 +118,7 @@ def push(db_factory, rows):
             status, msg = "ok", f"Quantity {r['qty']} → {r['new_qty']}"
             done += 1
         except Exception as e:
+            DB.log_exc("stock.push")
             status, msg = "failed", str(e)[:500]
             failed += 1
         with db_factory() as con:
@@ -125,6 +127,8 @@ def push(db_factory, rows):
             if status == "ok":
                 con.execute("UPDATE listings SET qty=? WHERE account_id=? AND item_id=?", (r["new_qty"], r["account_id"], r["item_id"]))
         time.sleep(0.2)
+    if done or failed:
+        DB.log("info" if not failed else "warn", "stock sync", f"Quantities sent to eBay: {done} done, {failed} failed")
     return done, failed
 
 
@@ -167,6 +171,7 @@ def check_orders(db_factory):
                     try:
                         oc = oos_control(tok)
                     except Exception:
+                        DB.log_exc("stock.check_orders")
                         oc = st["oos_control"] if st else None
                     con.execute("INSERT INTO stock_state(account_id,oos_control,oos_checked) VALUES(?,?,?) ON CONFLICT(account_id) DO UPDATE SET oos_control=excluded.oos_control, oos_checked=excluded.oos_checked",
                                 (a, oc, now_iso()))
@@ -201,6 +206,7 @@ def check_orders(db_factory):
                 con.execute("INSERT INTO stock_state(account_id,last_check,last_status,last_message) VALUES(?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET last_check=excluded.last_check, last_status=excluded.last_status, last_message=excluded.last_message",
                             (a, started, "ok", f"{len(orders)} recent orders checked, {n_units} synced units sold"))
         except Exception as e:
+            DB.log_exc("stock.check_orders")
             with db_factory() as con:
                 con.execute("INSERT INTO stock_state(account_id,last_status,last_message) VALUES(?,?,?) ON CONFLICT(account_id) DO UPDATE SET last_status=excluded.last_status, last_message=excluded.last_message",
                             (a, "error", str(e)[:500]))
@@ -224,6 +230,7 @@ def start_scheduler(db_factory, every_minutes=10):
                 if EB.configured():
                     cycle(db_factory)
             except Exception:
+                DB.log_exc("stock.loop")
                 pass
             time.sleep(every_minutes * 60)
     threading.Thread(target=loop, daemon=True).start()

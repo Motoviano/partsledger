@@ -42,6 +42,12 @@ CREATE TABLE IF NOT EXISTS cogs(
 
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
+-- Errors and notable events, kept 90 days (Users page → Log)
+CREATE TABLE IF NOT EXISTS app_log(
+  id INTEGER PRIMARY KEY, at TEXT DEFAULT CURRENT_TIMESTAMP, level TEXT, source TEXT,
+  message TEXT, detail TEXT, user TEXT);
+CREATE INDEX IF NOT EXISTS app_log_at ON app_log(at);
+
 CREATE TABLE IF NOT EXISTS uploads(
   id INTEGER PRIMARY KEY, filename TEXT, kind TEXT, account_id INTEGER,
   rows_added INTEGER, rows_skipped INTEGER, date_from TEXT, date_to TEXT,
@@ -111,3 +117,41 @@ def init():
 
 def get_settings(con):
     return {r["key"]: json.loads(r["value"]) for r in con.execute("SELECT key,value FROM settings")}
+
+
+# ------------------------------------------------------------------ log
+import re as _re
+_SECRET = [(_re.compile(r"(refresh_token|access_token|client_secret|password)([\"'=:\s]+)[^\s\"'&,}]+", _re.I), r"\1\2[hidden]"),
+           (_re.compile(r"(Bearer\s+)(?!\[)\S+", _re.I), r"\1[token hidden]"), (_re.compile(r"v\^1\.1#[^\s\"']+"), "[token hidden]")]
+
+
+def _clean(t):
+    t = str(t or "")
+    for rx, rep in _SECRET:
+        t = rx.sub(rep, t)
+    return t
+
+
+def log(level, source, message, detail=None, user=None):
+    """Write one log line. Never raises: logging must not break the thing being logged."""
+    try:
+        with db() as con:
+            con.execute("INSERT INTO app_log(level,source,message,detail,user) VALUES(?,?,?,?,?)",
+                        (level, str(source)[:80], _clean(message)[:1000], _clean(detail)[:8000] if detail else None, user))
+    except Exception:
+        pass
+
+
+def log_exc(source, level="error"):
+    """Log the exception currently being handled, with its traceback."""
+    import sys
+    import traceback
+    e = sys.exc_info()[1]
+    log(level, source, f"{type(e).__name__}: {e}" if e else "error", traceback.format_exc())
+
+
+def purge_log(con, days=90, keep_max=20000):
+    con.execute("DELETE FROM app_log WHERE at < datetime('now', ?)", (f"-{days} days",))
+    n = con.execute("SELECT COUNT(*) FROM app_log").fetchone()[0]
+    if n > keep_max:
+        con.execute("DELETE FROM app_log WHERE id IN (SELECT id FROM app_log ORDER BY id LIMIT ?)", (n - keep_max,))

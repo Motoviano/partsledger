@@ -11,6 +11,7 @@ import time
 import xml.etree.ElementTree as ET
 
 from . import ebay as EB
+from . import db as DB
 
 N = EB.N
 
@@ -171,6 +172,7 @@ def run_job(db_factory, job_id):
             except Skip as e:
                 status, col, msg, old = "skipped", "skipped", str(e), None
             except Exception as e:
+                DB.log_exc("edits.run_job")
                 status, col, msg, old = "failed", "failed", str(e)[:900], None
             with db_factory() as con:
                 if old is not None:
@@ -182,6 +184,8 @@ def run_job(db_factory, job_id):
             time.sleep(0.3)
         with db_factory() as con:
             con.execute("UPDATE edit_jobs SET status='finished' WHERE id=?", (job_id,))
+            j = con.execute("SELECT * FROM edit_jobs WHERE id=?", (job_id,)).fetchone()
+        DB.log("info" if not j["failed"] else "warn", "bulk edit", f"Job #{job_id} ({j['summary']}): {j['ok']} changed, {j['skipped']} skipped, {j['failed']} failed", user=None)
 
 
 def undo_changes(con, job_id):

@@ -332,6 +332,16 @@
           <button class="btn" type="submit">Save password</button>
         </form>
       </div>
+    
+      <div class="panel" id="logPanel" style="margin-top:18px" hidden>
+        <div class="panel-head"><div><h2>Log</h2><p id="logSub"></p></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <select id="logLevel" aria-label="Type"><option value="">Everything</option><option value="error">Errors</option><option value="warn">Refused actions</option><option value="browser">Browser errors</option><option value="info">Info</option></select>
+            <select id="logDays" aria-label="Period"><option value="1">Last 24 hours</option><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option></select>
+            <input type="search" id="logSearch" placeholder="Search the log" aria-label="Search the log">
+            <button class="btn primary" type="button" id="logDl">Download log</button></div></div>
+        <div class="tbl-wrap"><table id="logTable"></table></div>
+      </div>
     </section>
   </main>
 </div>

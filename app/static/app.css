@@ -255,3 +255,4 @@ a.btn{text-decoration:none;display:inline-block}
 @media (max-width:860px){.inbox{grid-template-columns:1fr}.threads{border-right:0;max-height:40vh;border-bottom:1px solid var(--line)}.tpl{grid-template-columns:1fr}}
 .convo .head h3 a{color:var(--accent-ink)}
 #adTable .next{max-width:300px;min-width:200px}
+.logd{white-space:pre-wrap;font:12px/1.4 var(--mono,monospace);background:var(--surface2);border:1px solid var(--line);border-radius:6px;padding:8px;margin:6px 0 0;max-height:260px;overflow:auto}

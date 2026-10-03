@@ -18,6 +18,8 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from copy import deepcopy
 
+from . import db as DB
+
 NS = "urn:ebay:apis:eBLBaseComponents"
 N = "{%s}" % NS
 ET.register_namespace("", NS)
@@ -453,6 +455,7 @@ def run_job(db_factory, job_id):
                                        VALUES(?,?,?,?,?,?,?,0,date('now'))""",
                                     (job["target_id"], res["new_item_id"], res["sku"], res["title"], res["price"], None, None))
             except Exception as e:
+                DB.log_exc("ebay.run_job")
                 with db_factory() as con:
                     con.execute("UPDATE ebay_job_items SET status='failed', message=? WHERE id=?", (str(e)[:900], it["id"]))
                     con.execute("UPDATE ebay_jobs SET done=done+1, failed=failed+1 WHERE id=?", (job_id,))
@@ -557,6 +560,7 @@ def run_ad_job(db_factory, account_id):
                 tok = access_token(con, account_id)
             res = apply_ad_rates(tok, rows)
         except Exception as e:
+            DB.log_exc("ebay.run_ad_job")
             res = {it: (False, str(e)[:500]) for it, _ in rows}
         with db_factory() as con:
             for it, _ in rows:
@@ -992,7 +996,11 @@ def sync_all(db_factory, listings=True):
     for a in ids:
         try:
             res[a] = sync_account(db_factory, a, listings=listings)
+            with db_factory() as con:
+                nm = (con.execute("SELECT name FROM accounts WHERE id=?", (a,)).fetchone() or [str(a)])[0]
+            DB.log("info", "sync", f"{nm}: {res[a]}")
         except Exception as e:
+            DB.log_exc("ebay.sync_all")
             with db_factory() as con:
                 con.execute("INSERT INTO sync_state(account_id,last_status,last_message) VALUES(?, 'error', ?) "
                             "ON CONFLICT(account_id) DO UPDATE SET last_status='error', last_message=excluded.last_message, last_tx_sync=datetime('now')",
@@ -1006,6 +1014,7 @@ def sync_all(db_factory, listings=True):
             try:
                 res[a] += "; " + sync_traffic(db_factory, a)
             except Exception as e:
+                DB.log_exc("ebay.sync_all")
                 with db_factory() as con:
                     con.execute("UPDATE sync_state SET last_traffic_sync=datetime('now'), traffic_status='error', traffic_message=? WHERE account_id=?",
                                 (str(e)[:500], a))
@@ -1024,6 +1033,7 @@ def start_scheduler(db_factory, every_minutes=60):
                 try:
                     sync_all(db_factory, listings=(n % 6 == 0))  # listings every 6 hours
                 except Exception:
+                    DB.log_exc("ebay.loop")
                     pass
                 finally:
                     _sync_lock.release()
