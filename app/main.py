@@ -39,6 +39,7 @@ def startup():
         con.executescript(ST.SCHEMA)
         con.executescript(MS.SCHEMA)
         con.executescript(AP.SCHEMA)
+        AP.migrate(con)
         con.execute("UPDATE ad_changes SET status='failed', message='Stopped by a restart; try again' WHERE status='waiting'")
         con.execute("UPDATE edit_jobs SET status='stopped' WHERE status IN ('queued','running')")
         con.execute("UPDATE ebay_jobs SET status='stopped' WHERE status IN ('queued','running')")
@@ -621,7 +622,7 @@ def ads_perf(request: Request, window: int = 30):
     need_user(request)
     w = 90 if window >= 90 else 30
     with DB.db() as con:
-        cur = [list(r) for r in con.execute("SELECT account_id,item_id,campaign_id,campaign_name,funding,rate,status FROM ad_current")]
+        cur = [list(r) for r in con.execute("SELECT account_id,item_id,campaign_id,campaign_name,funding,rate,status,strategy FROM ad_current")]
         perf = [list(r) for r in con.execute("SELECT account_id,item_id,impressions,clicks,ad_units,ad_sales,ad_fees FROM ad_perf WHERE window_days=?", (w,))]
         state = [dict(r) for r in con.execute("""SELECT a.id,a.name,s.fetched_at,s.status,s.message,s.date_to FROM accounts a
             JOIN ebay_tokens t ON t.account_id=a.id LEFT JOIN ad_perf_state s ON s.account_id=a.id ORDER BY a.sort,a.id""")]

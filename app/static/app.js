@@ -938,7 +938,7 @@ function adRows() {
   const f = F(), w = +$('adWin').value, from = addD(TODAY, -w), pf = edProfitFn();
   const minP = +$('adMinP').value || 0, lo = +$('adLo').value || 2, hi = +$('adHi').value || 15, step = +$('adStep').value || 2, startAt = +$('adStart').value || 5;
   const cur = new Map(), perf = new Map(), own = new Map();
-  ADS.current.forEach(c => { if (c[4] === 'COST_PER_SALE') cur.set(c[0] + '|' + c[1], { cid: c[2], cname: c[3], rate: c[5], status: c[6] }); });
+  ADS.current.forEach(c => { if (c[4] === 'COST_PER_SALE') cur.set(c[0] + '|' + c[1], { cid: c[2], cname: c[3], rate: c[5], status: c[6], dyn: c[7] === 'DYNAMIC' }); });
   ADS.perf.forEach(p => perf.set(p[0] + '|' + p[1], { imp: p[2], clicks: p[3], units: p[4], sales: p[5], fees: p[6] }));
   I.forEach(x => { if (x.d < from || !x.id) return; const k = ACC[x.a].id + '|' + x.id, o = own.get(k) || { u: 0, adU: 0, adS: 0, adF: 0 };
     o.u += x.q; if (x.ad < 0) { o.adU += x.q; o.adS += x.s; o.adF -= x.ad; } own.set(k, o); });
@@ -963,6 +963,7 @@ function adRows() {
       else { act = 'keep'; why = adU ? `${n0(adU)} ad sales, each leaving about ${gbp(profitNow)}` : 'No ad sales yet; an ad costs nothing until it sells'; }
     } else if (maxRate >= lo) { act = 'start'; nr = r1(Math.max(lo, Math.min(startAt, maxRate, hi))); why = `Not promoted. ${nr}% still leaves ${gbp(base - L.price * nr / 100)} per sale`; }
     else { act = 'none'; why = `Not promoted. Margin too thin: below ${lo}% would be needed`; }
+    if (c && c.dyn && nr != null && act !== 'stop') why += `. eBay sets rates itself in "${c.cname}", so this moves it to ${'Partsledger General'} at a fixed rate`;
     const typed = adRateTyped.get(k);
     return { ...L, k, c, p, o, rate, maxRate, base, profitNow, adU, adF, adS, act, nr: typed != null ? typed : nr, why, cost };
   }).filter(r => r.a !== undefined && f.a.has(r.a) && (f.allG || f.g.has(r.g)));
@@ -989,7 +990,7 @@ function drawAds() {
     { h: '', l: 1, v: r => adOff.has(r.k) ? 1 : 0, f: r => canAct(r) ? `<input type="checkbox" class="ad-sel" data-k="${esc(r.k)}" ${adTicked(r) ? 'checked' : ''} aria-label="Tick ${esc(r.sku || r.id)}">` : '' },
     { h: 'Listing', l: 1, cl: 'prod', v: r => r.t, f: r => `<span class="t">${esc(r.t)}</span><span class="s"><span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)} · ${esc(r.sku || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(r.id)}" target="_blank" rel="noopener">${esc(r.id)}</a></span>` },
     { h: 'Price', v: r => r.price, f: r => gbp(r.price) + `<span class="sub">stock ${r.qty ?? '–'}</span>` },
-    { h: 'Rate now', v: r => r.rate ?? -1, f: r => r.rate != null ? `${r.rate}%<span class="sub">${esc((r.c.cname || '').slice(0, 22))}</span>` : '<span class="muted">not promoted</span>' },
+    { h: 'Rate now', v: r => r.rate ?? -1, f: r => r.rate != null ? `${r.rate}%<span class="sub">${r.c.dyn ? 'dynamic · ' : ''}${esc((r.c.cname || '').slice(0, 22))}</span>` : '<span class="muted">not promoted</span>' },
     { h: 'Ad clicks', v: r => r.p ? r.p.clicks : -1, f: r => r.p ? `${n0(r.p.clicks)}<span class="sub">${n0(r.p.imp)} impr.</span>` : '–' },
     { h: 'Ad sales', v: r => r.adU, f: r => `${n0(r.adU)}<span class="sub">${r.adU ? gbp(r.adS) + ' · ' : ''}of ${n0(r.o.u)} sold</span>` },
     { h: 'Ad fees', v: r => r.adF, f: r => r.adF ? money(-r.adF) + (r.adS ? `<span class="sub">${(r.adF / r.adS * 100).toFixed(1)}% of ad sales</span>` : '') : '–' },

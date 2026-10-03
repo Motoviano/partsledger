@@ -40,6 +40,11 @@ CREATE TABLE IF NOT EXISTS ad_changes(
 _lock = threading.Lock()
 
 
+def migrate(con):
+    if "strategy" not in {r[1] for r in con.execute("PRAGMA table_info(ad_current)")}:
+        con.execute("ALTER TABLE ad_current ADD COLUMN strategy TEXT")  # FIXED or DYNAMIC ad rates
+
+
 def now_iso():
     return _dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
 
@@ -209,14 +214,15 @@ def refresh(db_factory, account_id):
     for c in cs:
         if c.get("campaignStatus") in ("ENDED", "DELETED", "ARCHIVED"):
             continue
-        fm = (c.get("fundingStrategy") or {}).get("fundingModel")
+        fs = c.get("fundingStrategy") or {}
+        fm, strat = fs.get("fundingModel"), (fs.get("adRateStrategy") or "FIXED").upper()
         for a in ads(tok, c["campaignId"]):
             if a.get("listingId"):
                 cur.append((account_id, str(a["listingId"]), c["campaignId"], c.get("campaignName"), fm,
-                            _num(a.get("bidPercentage")) if a.get("bidPercentage") else None, a.get("adStatus")))
+                            _num(a.get("bidPercentage")) if a.get("bidPercentage") else None, a.get("adStatus"), strat))
     with db_factory() as con:
         con.execute("DELETE FROM ad_current WHERE account_id=?", (account_id,))
-        con.executemany("INSERT OR REPLACE INTO ad_current VALUES(?,?,?,?,?,?,?)", cur)
+        con.executemany("INSERT OR REPLACE INTO ad_current(account_id,item_id,campaign_id,campaign_name,funding,rate,status,strategy) VALUES(?,?,?,?,?,?,?,?)", cur)
     cps = [c["campaignId"] for c in cs if (c.get("fundingStrategy") or {}).get("fundingModel") == "COST_PER_SALE"]
     if not cps:
         with db_factory() as con:
@@ -278,6 +284,7 @@ def apply(db_factory, change_ids):
             rows = [dict(r) for r in con.execute(f"SELECT * FROM ad_changes WHERE id IN ({','.join('?' * len(change_ids))})", change_ids)]
             where = {(r["account_id"], r["item_id"]): r["campaign_id"] for r in con.execute(
                 "SELECT account_id,item_id,campaign_id FROM ad_current WHERE funding='COST_PER_SALE'")}
+            dynamic = {r[0] for r in con.execute("SELECT DISTINCT campaign_id FROM ad_current WHERE strategy='DYNAMIC'")}
         by_acct = {}
         for r in rows:
             by_acct.setdefault(r["account_id"], []).append(r)
@@ -291,7 +298,7 @@ def apply(db_factory, change_ids):
             groups = {}
             for r in rs:
                 cid = where.get((a, r["item_id"]))
-                kind = "delete" if r["action"] == "stop" else ("update" if cid else "create")
+                kind = "delete" if r["action"] == "stop" else ("move" if cid in dynamic else "update" if cid else "create")
                 if kind == "delete" and not cid:
                     _mark(db_factory, [r["id"]], "done", "Wasn't promoted")
                     continue
@@ -299,6 +306,9 @@ def apply(db_factory, change_ids):
                     cid = None
                 groups.setdefault((kind, cid), []).append(r)
             for (kind, cid), grp in groups.items():
+                if kind == "move":
+                    move(db_factory, tok, a, cid, grp)
+                    continue
                 try:
                     if kind == "create":
                         cid = EB.find_or_create_campaign(tok)
@@ -313,6 +323,11 @@ def apply(db_factory, change_ids):
                         except ValueError:
                             j = {}
                         resp = {str(x.get("listingId")): x for x in j.get("responses") or []}
+                        if kind == "update":
+                            dyn = [r for r in chunk if "DYNAMIC" in EB._err(resp.get(r["item_id"]) or {}, "").upper()]
+                            if dyn:
+                                move(db_factory, tok, a, cid, dyn)
+                                chunk = [r for r in chunk if r not in dyn]
                         for r in chunk:
                             x = resp.get(r["item_id"])
                             ok = (x and x.get("statusCode") in (200, 201, 204)) or (not x and st < 300)
@@ -333,3 +348,58 @@ def _mark(db_factory, ids, status, msg):
     with db_factory() as con:
         for i in ids:
             con.execute("UPDATE ad_changes SET status=?, message=? WHERE id=?", (status, str(msg)[:500], i))
+
+
+def _bulk(tok, cid, path, reqs):
+    st, b, _ = _req("POST", f"{MKT}/ad_campaign/{cid}/{path}", tok, {"requests": reqs})
+    try:
+        j = json.loads(b or b"{}")
+    except ValueError:
+        j = {}
+    resp = {str(x.get("listingId")): x for x in j.get("responses") or []}
+    out = {}
+    for r in reqs:
+        x = resp.get(str(r["listingId"]))
+        ok = (x and x.get("statusCode") in (200, 201, 204)) or (not x and st < 300)
+        out[str(r["listingId"])] = (bool(ok), None if ok else EB._err(x or j, f"eBay error {st}"))
+    return out
+
+
+def move(db_factory, tok, a, from_cid, grp):
+    """eBay won't take a fixed rate for one listing in a dynamic-rate campaign. Take the listing out of that
+    campaign and add it to Partsledger General at the chosen rate; if that fails, put it back."""
+    try:
+        to_cid = EB.find_or_create_campaign(tok)
+    except Exception as e:
+        _mark(db_factory, [r["id"] for r in grp], "failed", str(e))
+        return
+    with db_factory() as con:
+        old_name = {r["item_id"]: r["campaign_name"] for r in con.execute(
+            "SELECT item_id,campaign_name FROM ad_current WHERE account_id=? AND campaign_id=?", (a, from_cid))}
+    for i in range(0, len(grp), 500):
+        chunk = grp[i:i + 500]
+        out = _bulk(tok, from_cid, "bulk_delete_ads_by_listing_id", [{"listingId": r["item_id"]} for r in chunk])
+        moved = [r for r in chunk if out[r["item_id"]][0]]
+        for r in chunk:
+            if not out[r["item_id"]][0]:
+                _mark(db_factory, [r["id"]], "failed", "Couldn't take it out of the dynamic campaign: " + out[r["item_id"]][1])
+        if not moved:
+            continue
+        added = _bulk(tok, to_cid, "bulk_create_ads_by_listing_id", [{"listingId": r["item_id"], "bidPercentage": f"{r['new_rate']:.1f}"} for r in moved])
+        back = [r for r in moved if not added[r["item_id"]][0]]
+        restored = _bulk(tok, from_cid, "bulk_create_ads_by_listing_id", [{"listingId": r["item_id"]} for r in back]) if back else {}
+        with db_factory() as con:
+            for r in moved:
+                ok, err = added[r["item_id"]]
+                if ok:
+                    con.execute("DELETE FROM ad_current WHERE account_id=? AND item_id=?", (a, r["item_id"]))
+                    con.execute("INSERT INTO ad_current(account_id,item_id,campaign_id,campaign_name,funding,rate,status,strategy) VALUES(?,?,?,?,?,?,?,?)",
+                                (a, r["item_id"], to_cid, EB.CAMPAIGN_NAME, "COST_PER_SALE", r["new_rate"], "ACTIVE", "FIXED"))
+                    con.execute("UPDATE ad_changes SET status='done', message=? WHERE id=?",
+                                (f"Moved from \"{old_name.get(r['item_id']) or 'dynamic campaign'}\" (dynamic rate) to {EB.CAMPAIGN_NAME} at {r['new_rate']:.1f}%", r["id"]))
+                else:
+                    put_back = restored.get(r["item_id"], (False, None))[0]
+                    con.execute("UPDATE ad_changes SET status='failed', message=? WHERE id=?",
+                                (f"Couldn't add it at a fixed rate ({err}). " + ("Put back in its dynamic campaign." if put_back else "It is NOT promoted now; add it again."), r["id"]))
+                    if not put_back:
+                        con.execute("DELETE FROM ad_current WHERE account_id=? AND item_id=? AND campaign_id=?", (a, r["item_id"], from_cid))
