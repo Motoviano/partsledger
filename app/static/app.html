@@ -200,12 +200,12 @@
     <section id="p-fitment" data-p hidden>
       <div class="stats" id="ftStats"></div>
       <div class="panel" style="margin-top:14px">
-        <div class="panel-head"><div><h2>Fitment check</h2><p>Reads each listing's compatibility list (fitment) from eBay and flags: no fitment, a title make that doesn't match the fitment, a title that doesn't name the main fitment, title years that differ from the fitment years, and the same SKU on another listing with more fitment rows (which can be copied over; Undo is on Bulk edit → Recent edits). Listings in categories where eBay doesn't take fitment aren't flagged.</p><p class="muted" id="ftStatus" style="margin:6px 0 0"></p></div></div>
+        <div class="panel-head"><div><h2>Fitment check</h2><p>Reads each listing's compatibility list (fitment) from eBay and flags: no fitment, a title make that doesn't match the fitment, a title that doesn't name the main fitment, title years that differ from the fitment years, and the same SKU on another listing with more fitment rows (which can be copied over; Undo is on Bulk edit → Recent edits). Listings in categories where eBay doesn't take fitment aren't flagged.</p><p id="ftStatus" style="margin:8px 0 0"></p></div></div>
         <div class="form-row">
+          <button class="btn primary" type="button" id="ftCheck">Check listings</button>
           <select id="ftView" aria-label="Show"><option value="problems">With problems</option><option value="none">No fitment</option><option value="make">Title make doesn't match</option><option value="fewer">Fewer rows than the same SKU elsewhere</option><option value="years">Title years differ</option><option value="model">Title doesn't name the fitment</option><option value="ok">No problems</option><option value="unchecked">Not checked yet</option><option value="all">All listings</option></select>
           <input type="search" id="ftSearch" placeholder="Search SKU or title" aria-label="Search SKU or title" style="width:200px">
           <span class="muted" id="ftSel"></span>
-          <button class="btn" type="button" id="ftCheck">Check listings</button>
           <button class="btn primary" type="button" id="ftCopy" disabled>Copy fitment</button>
         </div>
         <div class="tbl-wrap"><table id="ftTable"></table></div>

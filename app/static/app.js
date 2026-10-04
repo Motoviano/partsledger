@@ -1730,9 +1730,19 @@ const FTC = { none: ['No fitment', 'm'], make: ['Make mismatch', 'm'], fewer: ['
 async function renderFitment() {
   try { FTD = await api('/api/fitment'); } catch (e) { toast(e.message); return; }
   const pr = FTD.progress;
-  $('ftStatus').innerHTML = pr.running ? `<b>Checking ${n0(pr.done)} of ${n0(pr.total)} listings…</b>` : pr.started ? `Last check: ${n0(pr.done)} listings${pr.failed ? `, ${n0(pr.failed)} failed` : ''}.` : 'Click Check listings to read the fitment of the listings shown.';
+  const none = !FTD.rows.some(r => r.checked);
+  $('ftStatus').innerHTML = pr.running ? `<b>Checking ${n0(pr.done)} of ${n0(pr.total)} listings…</b> The results fill in as it goes.`
+    : none ? '<b>Start here:</b> click <b>Check listings</b> below. The app reads each listing\'s fitment from eBay (a few minutes for a thousand listings), then the problems show up in the table.'
+    : `<span class="muted">Last check: ${n0(pr.done || 0)} listings${pr.failed ? `, ${n0(pr.failed)} failed` : ''}. Click Check listings again after you change fitment on eBay.</span>`;
   drawFitment();
   clearTimeout(ftPoll); if (pr.running && page === 'fitment') ftPoll = setTimeout(renderFitment, 4000);
+}
+// what Check reads: every listing for the account filter and search, whatever the view; never-checked first, then the oldest checks
+function ftTargets() {
+  const f = F(), q = $('ftSearch').value.trim().toLowerCase();
+  return (FTD ? FTD.rows : []).filter(r => AIDX[r.account_id] !== undefined && f.a.has(AIDX[r.account_id])
+    && (!q || (r.sku || '').toLowerCase().includes(q) || (r.title || '').toLowerCase().includes(q)))
+    .sort((x, y) => (x.checked || '').localeCompare(y.checked || '') || (y.sold || 0) - (x.sold || 0)).slice(0, FTD.max);
 }
 function ftRows() {
   const f = F(), q = $('ftSearch').value.trim().toLowerCase(), v = $('ftView').value;
@@ -1750,6 +1760,8 @@ function drawFitment() {
     stat('Make mismatch', n0(has('make')), 'title vs fitment') + stat('Fewer rows', n0(has('fewer')), 'than the same SKU elsewhere') +
     stat('Years differ', n0(has('years')), 'title vs fitment') + stat('Title misses fitment', n0(has('model')), 'main make/model');
   const rows = ftRows();
+  if (!rows.length && !chk.length && $('ftView').value !== 'unchecked') ftState.empty = 'Nothing checked yet: click Check listings above to read the fitment from eBay.';
+  else ftState.empty = 'No listings for this selection.';
   table($('ftTable'), [
     { h: '', l: 1, v: r => ftCan(r) ? 0 : 1, f: r => ftCan(r) ? `<input type="checkbox" class="ft-sel" data-k="${esc(r.k)}" ${ftOff.has(r.k) ? '' : 'checked'} aria-label="Copy fitment to ${esc(r.sku || r.item_id)}">` : '' },
     { h: 'Listing', l: 1, cl: 'prod', v: r => r.title || '', f: r => `<span class="t">${esc(r.title || r.item_id)}</span><span class="s"><span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)} · ${esc(r.sku || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(r.item_id)}" target="_blank" rel="noopener">${esc(r.item_id)}</a></span>` },
@@ -1765,14 +1777,15 @@ function drawFitment() {
     const ri = (ftState.rows || []).findIndex(r => r.k === ftOpen), tr = t.querySelector(`tbody tr[data-ri="${ri}"]`), r = ftState.rows[ri];
     if (r && tr) tr.insertAdjacentHTML('afterend', `<tr><td></td><td colspan="5" class="l"><table class="mini" style="width:auto;margin:6px 0 10px"><thead><tr><th class="l">Make</th><th class="l">Model</th><th class="l">Years</th><th>Rows</th></tr></thead><tbody>${r.fit.slice(0, 40).map(x => `<tr><td class="l">${esc(x.make)}</td><td class="l">${esc(x.model || '–')}</td><td class="l">${x.y0 ? x.y0 + '–' + x.y1 : '–'}</td><td>${n0(x.n)}</td></tr>`).join('')}${r.fit.length > 40 ? `<tr><td colspan="4" class="l muted">and ${r.fit.length - 40} more</td></tr>` : ''}</tbody></table></td></tr>`);
   }
-  $('ftCheck').textContent = `Check ${n0(Math.min(rows.length, FTD.max))} listings`; $('ftCheck').disabled = !rows.length || FTD.progress.running;
+  const tg = ftTargets(), un = tg.filter(r => !r.checked).length;
+  $('ftCheck').textContent = un ? `Check ${n0(tg.length)} listings (${n0(un)} not checked yet)` : `Check ${n0(tg.length)} listings again`; $('ftCheck').classList.toggle('primary', un > 0); $('ftCheck').disabled = !tg.length || FTD.progress.running;
   ftCount();
 }
 function ftChosen() { return ftRows().filter(r => ftCan(r) && !ftOff.has(r.k)); }
 function ftCount() { const n = ftChosen().length; $('ftSel').textContent = n ? `${n0(n)} ticked to copy` : ''; $('ftCopy').disabled = !n; $('ftCopy').textContent = n ? `Copy fitment to ${n0(n)} listing${n === 1 ? '' : 's'}` : 'Copy fitment'; }
 ['ftView', 'ftSearch'].forEach(id => $(id).addEventListener('input', () => { ftOpen = null; drawFitment(); }));
 $('ftCheck').onclick = async () => {
-  const b = $('ftCheck'), rs = ftRows().slice(0, FTD.max); if (!rs.length) return;
+  const b = $('ftCheck'), rs = ftTargets(); if (!rs.length) return;
   if (rs.length > 50 && b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = `Click again to read ${n0(rs.length)} listings from eBay`; setTimeout(() => { b.dataset.sure = ''; drawFitment(); }, 6000); return; }
   b.dataset.sure = '';
   try { const r = await post('/api/fitment/check', { items: rs.map(x => ({ account_id: x.account_id, item_id: x.item_id })) }); toast(`Checking ${n0(r.queued)} listings…`); setTimeout(renderFitment, 1500); } catch (e) { toast(e.message); }
