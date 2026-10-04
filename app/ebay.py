@@ -883,6 +883,7 @@ TRAFFIC_METRICS = ["LISTING_IMPRESSION_TOTAL", "LISTING_IMPRESSION_SEARCH_RESULT
                    "LISTING_VIEWS_SOURCE_SEARCH_RESULTS_PAGE", "TRANSACTION"]
 TRAFFIC_COLS = ["impressions", "search_impressions", "views", "search_views", "transactions"]
 TRAFFIC_BACKFILL_DAYS = 30
+TRAFFIC_DAILY_CALLS = 30  # per account; eBay's default traffic_report limit is 100 calls a day
 TRAFFIC_REFRESH_DAYS = 3  # eBay finalises traffic a day or two late, so the newest days are fetched again
 
 SCHEMA += """
@@ -954,8 +955,19 @@ def sync_traffic(db_factory, account_id, max_calls=400):
     if not ids:
         return "no active listings to check traffic for"
     refresh_from = (yday - _dt.timedelta(days=TRAFFIC_REFRESH_DAYS - 1)).isoformat()
+    # eBay allows only ~100 traffic-report calls a day: re-read the newest days once a day (not every hourly sync)
+    # and keep each account under TRAFFIC_DAILY_CALLS
+    with db_factory() as con:
+        st = json.loads((con.execute("SELECT value FROM settings WHERE key=?", (f"traffic_calls:{account_id}",)).fetchone() or ["{}"])[0])
+    used = st.get("n", 0) if st.get("day") == today.isoformat() else 0
+    refreshed = st.get("refreshed") == today.isoformat()
+    max_calls = min(max_calls, TRAFFIC_DAILY_CALLS - used)
     days = [(yday - _dt.timedelta(days=i)).isoformat() for i in range(TRAFFIC_BACKFILL_DAYS)]
-    days = [d for d in days if d not in have or d >= refresh_from]  # newest first, so a cut-short run still gets recent days
+    days = [d for d in days if d not in have or (d >= refresh_from and not refreshed)]  # newest first, so a cut-short run still gets recent days
+    if not days:
+        return f"traffic up to date ({used} calls today)"
+    if max_calls <= 0:
+        return f"traffic: today's eBay allowance used ({used} calls), more tomorrow"
     batches = [ids[i:i + 200] for i in range(0, len(ids), 200)]
     calls = done = 0
     note = ""
@@ -973,6 +985,8 @@ def sync_traffic(db_factory, account_id, max_calls=400):
             if "date" in msg.lower() and day >= refresh_from:
                 continue  # eBay hasn't published this day yet
             with db_factory() as con:
+                con.execute("INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)", (f"traffic_calls:{account_id}", json.dumps(
+                    {"day": today.isoformat(), "n": used + calls + 1, "refreshed": st.get("refreshed")})))
                 con.execute("UPDATE sync_state SET last_traffic_sync=datetime('now'), traffic_status='error', traffic_message=? WHERE account_id=?",
                             (f"Traffic stopped at {day}: {msg}"[:500], account_id))
             return f"traffic error: {msg[:150]}"
@@ -982,6 +996,9 @@ def sync_traffic(db_factory, account_id, max_calls=400):
                             [(account_id, k, day, *v) for k, v in got.items() if any(v)])
             con.execute("INSERT OR REPLACE INTO traffic_days(account_id,date,listings) VALUES(?,?,?)", (account_id, day, len(ids)))
         done += 1
+    with db_factory() as con:
+        con.execute("INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)", (f"traffic_calls:{account_id}", json.dumps(
+            {"day": today.isoformat(), "n": used + calls, "refreshed": today.isoformat() if (refreshed or done) else st.get("refreshed")})))
     msg = f"{len(ids)} listings, {done} days updated{note}"
     with db_factory() as con:
         con.execute("UPDATE sync_state SET last_traffic_sync=datetime('now'), traffic_status='ok', traffic_message=? WHERE account_id=?",
