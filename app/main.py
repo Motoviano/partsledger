@@ -711,7 +711,12 @@ def offers(request: Request):
         log = [dict(r) for r in con.execute("SELECT o.*, a.name AS account FROM offer_log o LEFT JOIN accounts a ON a.id=o.account_id ORDER BY o.id DESC LIMIT 300")]
         state = [dict(r) for r in con.execute("""SELECT a.id,a.name,s.last_check,s.last_status,s.last_message FROM accounts a
             JOIN ebay_tokens t ON t.account_id=a.id LEFT JOIN offer_state s ON s.account_id=a.id ORDER BY a.sort,a.id""")]
-        return {"settings": OF.get_settings(con), "state": state, "log": log}
+        st = OF.get_settings(con)
+        res = OF.results(con)
+    for o in log:
+        o["sales"] = res.get(o["id"], [])
+    return {"settings": st, "state": state, "log": log, "nextRun": OF.next_slot(st) if st["offer_auto"] else None,
+            "lastRun": st.get("offer_last_auto")}
 
 
 @app.post("/api/offers/find")

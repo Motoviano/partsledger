@@ -27,7 +27,7 @@ CREATE INDEX IF NOT EXISTS offer_log_item ON offer_log(account_id, item_id, at);
 CREATE TABLE IF NOT EXISTS offer_state(account_id INTEGER PRIMARY KEY, last_check TEXT, last_status TEXT, last_message TEXT);
 """
 DEFAULTS = {"offer_auto": False, "offer_discount": 10.0, "offer_min_profit": 1.0, "offer_min_discount": 5.0,
-            "offer_days_between": 7, "offer_message": "Thanks for your interest in this part. Here's a special price for you, valid for 2 days."}
+            "offer_days_between": 7, "offer_schedule": "weekly", "offer_weekday": 1, "offer_time": "10:00", "offer_last_auto": None, "offer_message": "Thanks for your interest in this part. Here's a special price for you, valid for 2 days."}
 _lock = threading.Lock()
 
 
@@ -49,11 +49,24 @@ def set_settings(con, b):
         if k in DEFAULTS:
             if k == "offer_auto":
                 v = bool(v)
+            elif k == "offer_schedule":
+                v = "weekly" if v == "weekly" else "6h"
+            elif k == "offer_weekday":
+                v = max(0, min(6, int(v)))  # 0 = Monday
+            elif k == "offer_time":
+                hh, mm = (str(v) + ":0").split(":")[:2]
+                v = f"{max(0, min(23, int(hh or 0))):02d}:{max(0, min(59, int(mm or 0))):02d}"
+            elif k == "offer_last_auto":
+                v = str(v) if v else None
             elif k == "offer_message":
                 v = str(v)[:1000].strip() or DEFAULTS[k]
             else:
                 v = max(0.0, float(v))
             con.execute("INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)", (k, json.dumps(v)))
+    if any(k in b for k in ("offer_schedule", "offer_weekday", "offer_time")) or b.get("offer_auto"):
+        # new schedule (or just switched on): the next run is the next slot, never one that has already passed
+        st = get_settings(con)
+        con.execute("INSERT OR REPLACE INTO settings(key,value) VALUES('offer_last_auto',?)", (json.dumps(due_slot(st)),))
     return get_settings(con)
 
 
@@ -141,7 +154,7 @@ def plan(con, ids_by_account, s=None):
     s = s or get_settings(con)
     fl = Floors(con, s["offer_min_profit"])
     sku_map = {r["item_id"]: r["sku"] for r in con.execute("SELECT item_id,sku FROM sku_map")}
-    since = (_dt.datetime.utcnow() - _dt.timedelta(days=float(s["offer_days_between"]))).strftime("%Y-%m-%d %H:%M:%S")
+    since = (_dt.datetime.utcnow() - _dt.timedelta(days=float(s["offer_days_between"]), hours=-3)).strftime("%Y-%m-%d %H:%M:%S")
     recent = {(r["account_id"], r["item_id"]): r["at"] for r in con.execute(
         "SELECT account_id,item_id,MAX(at) at FROM offer_log WHERE status='sent' GROUP BY 1,2")}
     out = []
@@ -215,19 +228,60 @@ def find_all(db_factory):
     return out
 
 
-def auto_cycle(db_factory):
+UK = None
+
+
+def _uk_now():
+    global UK
+    if UK is None:
+        from zoneinfo import ZoneInfo
+        UK = ZoneInfo("Europe/London")
+    return _dt.datetime.now(UK)
+
+
+def due_slot(s, now=None):
+    """The latest scheduled time that has passed (UK time), as an ISO string, or None if nothing is due yet."""
+    now = now or _uk_now()
+    if s["offer_schedule"] == "weekly":
+        hh, mm = map(int, s["offer_time"].split(":"))
+        slot = (now - _dt.timedelta(days=(now.weekday() - int(s["offer_weekday"])) % 7)).replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if slot > now:
+            slot -= _dt.timedelta(days=7)
+    else:
+        slot = now.replace(minute=0, second=0, microsecond=0) - _dt.timedelta(hours=now.hour % 6)
+    return slot.isoformat(timespec="minutes")
+
+
+def next_slot(s, now=None):
+    now = now or _uk_now()
+    last = _dt.datetime.fromisoformat(due_slot(s, now))
+    return (last + (_dt.timedelta(days=7) if s["offer_schedule"] == "weekly" else _dt.timedelta(hours=6))).isoformat(timespec="minutes")
+
+
+def auto_cycle(db_factory, now=None):
     with _lock:
         with db_factory() as con:
             s = get_settings(con)
         if not s["offer_auto"]:
-            return
+            return False
+        slot = due_slot(s, now)
+        last = s.get("offer_last_auto")
+        if last and last >= slot:
+            return False  # this slot has already run
+        if not last:  # just switched on: start at the next slot, don't fire straight away
+            with db_factory() as con:
+                set_settings(con, {"offer_last_auto": slot})
+            return False
+        with db_factory() as con:
+            set_settings(con, {"offer_last_auto": slot})
         ids = find_all(db_factory)
         with db_factory() as con:
             rows = [r for r in plan(con, ids, s) if not r["skip"]]
         send_rows(db_factory, rows, auto=True)
+        return True
 
 
-def start_scheduler(db_factory, every_hours=6):
+def start_scheduler(db_factory, check_minutes=10):
     def loop():
         time.sleep(420)
         while True:
@@ -236,5 +290,31 @@ def start_scheduler(db_factory, every_hours=6):
                     auto_cycle(db_factory)
             except Exception:
                 DB.log_exc("offers.loop")
-            time.sleep(every_hours * 3600)
+            time.sleep(check_minutes * 60)
     threading.Thread(target=loop, daemon=True).start()
+
+
+# ------------------------------------------------------------------ did the offers sell?
+def results(con, offer_days=2):
+    """For each sent offer: sales of that listing from the day it was sent until the offer ran out (plus a day).
+    A sale at the offer price (within 2p) counts as from the offer; other sales in that time are listed apart."""
+    settings = DB.get_settings(con)
+    accounts, items, overheads, book = PR.build(con, settings)
+    profit = defaultdict(float)
+    for x in items:
+        back = x[13] * x[7] if x[15] else 0
+        profit[(x[1], x[2], x[3])] += x[8] + x[9] + x[10] + x[11] + x[12] - x[13] * x[7] + back
+    out = {}
+    for o in con.execute("SELECT id,account_id,item_id,offer_price,at FROM offer_log WHERE status='sent'"):
+        start = o["at"][:10]
+        end = (_dt.date.fromisoformat(start) + _dt.timedelta(days=offer_days + 1)).isoformat()
+        sales = []
+        for t in con.execute("""SELECT date,order_no,qty,item_subtotal FROM transactions WHERE account_id=? AND item_id=? AND type='Order'
+                                AND item_subtotal IS NOT NULL AND date BETWEEN ? AND ?""", (o["account_id"], o["item_id"], start, end)):
+            q = t["qty"] or 1
+            unit = (t["item_subtotal"] or 0) / q
+            sales.append({"date": t["date"], "order": t["order_no"], "qty": q, "unit": round(unit, 2),
+                          "at_offer": abs(unit - (o["offer_price"] or 0)) <= 0.02,
+                          "profit": round(profit.get((o["account_id"], t["order_no"], o["item_id"]), 0), 2)})
+        out[o["id"]] = sales
+    return out

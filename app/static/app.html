@@ -168,19 +168,23 @@
           <div class="f"><label for="ofDisc">Discount %</label><input type="number" id="ofDisc" step="1" min="5" max="50" style="width:80px"></div>
           <div class="f"><label for="ofMinP">Keep at least £ profit</label><input type="number" id="ofMinP" step="0.5" min="0" style="width:90px"></div>
           <div class="f"><label for="ofMinD">Skip if the discount would be under %</label><input type="number" id="ofMinD" step="1" min="0" style="width:80px"></div>
+          <div class="f"><label for="ofSched">Send automatically</label><select id="ofSched"><option value="weekly">Once a week</option><option value="6h">Every 6 hours</option></select></div>
+          <div class="f" id="ofWhenWrap"><label for="ofDay">Day and time (UK)</label><div style="display:flex;gap:6px"><select id="ofDay"><option value="0">Monday</option><option value="1">Tuesday</option><option value="2">Wednesday</option><option value="3">Thursday</option><option value="4">Friday</option><option value="5">Saturday</option><option value="6">Sunday</option></select><input type="time" id="ofTime" step="900"></div></div>
           <div class="f"><label for="ofDays">Same listing again after (days)</label><input type="number" id="ofDays" step="1" min="1" style="width:80px"></div>
           <div class="f" style="flex:1;min-width:260px"><label for="ofMsg">Message to buyers</label><input type="text" id="ofMsg" maxlength="1000" style="width:100%"></div>
           <button class="btn" type="button" id="ofSaveSet">Save settings</button>
         </div>
         <p class="muted" id="ofStatus" style="padding:0 16px 14px;margin:0"></p>
       </div>
+      <div class="stats" id="ofStats" style="margin-top:14px"></div>
       <div class="panel" style="margin-top:14px">
         <div class="panel-head"><div><h2>Listings with interested buyers</h2><p id="ofSub">Click "Find interested buyers" to ask eBay which listings have them now.</p></div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><span class="muted" id="ofSel"></span><button class="btn" type="button" id="ofFind">Find interested buyers</button><button class="btn primary" type="button" id="ofSend" disabled>Send offers</button></div></div>
         <div class="tbl-wrap"><table id="ofTable"></table></div>
       </div>
       <div class="panel" style="margin-top:14px">
-        <div class="panel-head"><div><h2>Offers sent</h2></div></div>
+        <div class="panel-head"><div><h2>Offers sent</h2><p>"Sold" counts sales of that listing from the day the offer went out until it ran out (2 days, plus a day for late orders). A sale at the offer price is counted as from the offer; other sales in that time are shown separately.</p></div>
+          <select id="ofWin" aria-label="Period"><option value="30">Last 30 days</option><option value="90" selected>Last 90 days</option><option value="365">Last year</option></select></div>
         <div class="tbl-wrap"><table id="ofLog"></table></div>
       </div>
     </section>

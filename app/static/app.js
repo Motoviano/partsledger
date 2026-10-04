@@ -1306,10 +1306,25 @@ async function renderOffers() {
   const s = OFS.settings;
   $('ofAuto').textContent = s.offer_auto ? 'Automatic offers: ON (click to turn off)' : 'Automatic offers: OFF (click to turn on)';
   $('ofAuto').classList.toggle('on', !!s.offer_auto); $('ofAuto').classList.toggle('primary', !s.offer_auto);
-  [['ofDisc', 'offer_discount'], ['ofMinP', 'offer_min_profit'], ['ofMinD', 'offer_min_discount'], ['ofDays', 'offer_days_between'], ['ofMsg', 'offer_message']].forEach(([id, k]) => { if (document.activeElement !== $(id)) $(id).value = s[k]; });
-  $('ofStatus').innerHTML = (s.offer_auto ? 'Automatic: every 6 hours the app finds interested buyers and sends offers that pass the rules. ' : 'Automatic sending is off; offers only go out when you click Send offers. ') +
+  [['ofDisc', 'offer_discount'], ['ofMinP', 'offer_min_profit'], ['ofMinD', 'offer_min_discount'], ['ofDays', 'offer_days_between'], ['ofMsg', 'offer_message'], ['ofSched', 'offer_schedule'], ['ofDay', 'offer_weekday'], ['ofTime', 'offer_time']].forEach(([id, k]) => { if (document.activeElement !== $(id)) $(id).value = s[k]; });
+  $('ofWhenWrap').hidden = $('ofSched').value !== 'weekly';
+  const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  const when = s.offer_schedule === 'weekly' ? `every ${days[s.offer_weekday]} at ${s.offer_time} (UK time)` : 'every 6 hours';
+  const nxt = OFS.nextRun ? new Date(OFS.nextRun).toLocaleString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : null;
+  $('ofStatus').innerHTML = (s.offer_auto ? `<b>Automatic: ${when}.</b> Next run ${nxt}. The app finds interested buyers and sends the offers that pass the rules. ` : `Automatic sending is off (set to ${when}); offers only go out when you click Send offers. `) +
     OFS.state.filter(x => x.last_check).map(x => `${esc(x.name)}: ${x.last_status === 'error' ? '<span class="neg">' + esc(x.last_message) + '</span>' : esc(x.last_message)} (${ago(x.last_check)})`).join(' · ');
-  drawOffers(); drawOfferLog();
+  drawOffers(); drawOfferLog(); drawOfferStats();
+}
+function ofInWin() { const w = +$('ofWin').value, from = new Date(Date.now() - w * 864e5).toISOString().slice(0, 10), f = F(); return OFS.log.filter(o => o.status === 'sent' && (o.at || '').slice(0, 10) >= from && f.a.has(AIDX[o.account_id])); }
+function drawOfferStats() {
+  const sent = ofInWin(), done = sent.filter(o => (Date.now() - new Date(o.at.replace(' ', 'T') + 'Z')) > 3 * 864e5);
+  const at = sent.flatMap(o => o.sales.filter(x => x.at_offer)), other = sent.flatMap(o => o.sales.filter(x => !x.at_offer));
+  const units = at.reduce((t, x) => t + x.qty, 0), value = at.reduce((t, x) => t + x.unit * x.qty, 0), prof = at.reduce((t, x) => t + x.profit, 0);
+  const won = done.filter(o => o.sales.some(x => x.at_offer)).length;
+  const stat = (k, v, sub, c = '') => `<div class="stat"><small>${k}</small><b class="${c}">${v}</b>${sub ? `<span>${sub}</span>` : ''}</div>`;
+  $('ofStats').innerHTML = stat('Offers sent', n0(sent.length), `last ${$('ofWin').value} days`) + stat('Buyers reached', n0(sent.reduce((t, o) => t + (o.buyers || 0), 0)), 'interested buyers') +
+    stat('Sold at offer price', n0(units), units ? gbp(value) + ' of sales' : 'units') + stat('Profit from offer sales', gbp(prof), 'after COGS, fees, postage', cls(prof)) +
+    stat('Offers that sold', pct(done.length ? won / done.length : NaN), `${n0(won)} of ${n0(done.length)} finished offers`) + stat('Other sales in offer time', n0(other.reduce((t, x) => t + x.qty, 0)), 'not at the offer price');
 }
 function drawOffers() {
   const f = F(), rows = ofRows.map(r => ({ ...r, a: AIDX[r.account_id], k: r.account_id + '|' + r.item_id })).filter(r => r.a !== undefined && f.a.has(r.a));
@@ -1330,10 +1345,14 @@ function drawOffers() {
 function ofChosen() { const f = F(); return ofRows.filter(r => !r.skip && f.a.has(AIDX[r.account_id]) && !ofOff.has(r.account_id + '|' + r.item_id)); }
 function ofCount() { const n = ofChosen().length; $('ofSel').textContent = ofRows.length ? `${n0(n)} ticked` : ''; $('ofSend').disabled = !n; }
 function drawOfferLog() {
-  $('ofLog').innerHTML = OFS.log.length ? `<thead><tr><th class="l">When (UTC)</th><th class="l">Account</th><th class="l">Listing</th><th>Price</th><th>Offer</th><th>Buyers</th><th class="l">Result</th></tr></thead><tbody>${OFS.log.map(o => `<tr>
+  const shown = OFS.log.filter(o => o.status !== 'sent' || ofInWin().includes(o));
+  $('ofLog').innerHTML = shown.length ? `<thead><tr><th class="l">When (UTC)</th><th class="l">Account</th><th class="l">Listing</th><th>Price</th><th>Offer</th><th>Buyers</th><th class="l">Sold</th><th class="l">Result</th></tr></thead><tbody>${shown.map(o => `<tr>
     <td class="l">${esc((o.at || '').slice(0, 16))}${o.auto ? '<span class="sub">automatic</span>' : o.by ? `<span class="sub">${esc(o.by.split('@')[0])}</span>` : ''}</td><td class="l">${esc(o.account || '')}</td>
     <td class="l prod"><span class="t">${esc(o.title || '')}</span><span class="s">${esc(o.sku || '')} · <a href="https://www.ebay.co.uk/itm/${esc(o.item_id)}" target="_blank" rel="noopener">${esc(o.item_id)}</a></span></td>
     <td>${gbp(o.price)}</td><td><b>${gbp(o.offer_price)}</b></td><td>${n0(o.buyers)}</td>
+    <td class="l prod">${(() => { const a = (o.sales || []).filter(x => x.at_offer), b = (o.sales || []).filter(x => !x.at_offer);
+      return (a.length ? `<span class="chip k">${n0(a.reduce((t, x) => t + x.qty, 0))} at offer</span> <span class="sub">${money(a.reduce((t, x) => t + x.profit, 0))} profit</span>` : o.status === 'sent' ? '<span class="muted">none yet</span>' : '') +
+        (b.length ? `<span class="sub">+${n0(b.reduce((t, x) => t + x.qty, 0))} at another price</span>` : ''); })()}</td>
     <td class="l prod">${o.status === 'sent' ? '<span class="chip k">Sent</span> ' : '<span class="chip m">Failed</span> '}${esc(o.message || '')}</td></tr>`).join('')}</tbody>` : '<tbody><tr><td class="empty">No offers sent yet.</td></tr></tbody>';
 }
 $('ofFind').onclick = async () => {
@@ -1347,12 +1366,15 @@ $('ofSend').onclick = async () => {
   b.dataset.sure = ''; b.textContent = 'Send offers';
   try { const r = await post('/api/offers/send', { items: ch.map(x => ({ account_id: x.account_id, item_id: x.item_id })) }); toast(`Sending ${r.queued} offers…`); ofRows = []; $('ofTable').innerHTML = ''; setTimeout(renderOffers, 4000); } catch (e) { toast(e.message); }
 };
+$('ofSched').addEventListener('change', () => { $('ofWhenWrap').hidden = $('ofSched').value !== 'weekly'; });
+$('ofWin').addEventListener('change', () => { drawOfferStats(); drawOfferLog(); });
 $('ofSaveSet').onclick = async () => {
-  try { await post('/api/offers/settings', { offer_discount: +$('ofDisc').value, offer_min_profit: +$('ofMinP').value, offer_min_discount: +$('ofMinD').value, offer_days_between: +$('ofDays').value, offer_message: $('ofMsg').value }); toast('Offer settings saved' + (ofRows.length ? '. Click Find interested buyers to recalculate.' : '')); renderOffers(); } catch (e) { toast(e.message); }
+  try { await post('/api/offers/settings', { offer_schedule: $('ofSched').value, offer_weekday: +$('ofDay').value, offer_time: $('ofTime').value || '10:00', offer_discount: +$('ofDisc').value, offer_min_profit: +$('ofMinP').value, offer_min_discount: +$('ofMinD').value, offer_days_between: +$('ofDays').value, offer_message: $('ofMsg').value }); toast('Offer settings saved' + (ofRows.length ? '. Click Find interested buyers to recalculate.' : '')); renderOffers(); } catch (e) { toast(e.message); }
 };
 $('ofAuto').onclick = async () => {
-  const b = $('ofAuto'), on = !OFS.settings.offer_auto;
-  if (on && b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = 'Click again: send offers automatically every 6 hours'; setTimeout(() => { b.dataset.sure = ''; renderOffers(); }, 6000); return; }
+  const b = $('ofAuto'), on = !OFS.settings.offer_auto, s = OFS.settings;
+  const when = s.offer_schedule === 'weekly' ? `every ${['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][s.offer_weekday]} at ${s.offer_time}` : 'every 6 hours';
+  if (on && b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = `Click again: send offers automatically ${when}`; setTimeout(() => { b.dataset.sure = ''; renderOffers(); }, 6000); return; }
   b.dataset.sure = '';
   try { await post('/api/offers/settings', { offer_auto: on }); toast(on ? 'Automatic offers are on' : 'Automatic offers are off'); renderOffers(); } catch (e) { toast(e.message); }
 };
