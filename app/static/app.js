@@ -513,6 +513,13 @@ function edShowOpts() {
   }[fld];
 }
 ['edField', 'edPriceHow', 'edTitleHow'].forEach(id => $(id).addEventListener('change', () => { edShowOpts(); $('edPrevPanel').hidden = true; }));
+// the change types as buttons, so every option (incl. Best Offer rules) is in view
+function edKinds() {
+  const sel = $('edField');
+  $('edKinds').innerHTML = [...sel.options].map(o => `<button type="button" role="radio" aria-checked="${o.value === sel.value}" data-v="${o.value}">${esc(o.textContent)}</button>`).join('');
+  $('edKinds').querySelectorAll('button').forEach(b => b.onclick = () => { sel.value = b.dataset.v; sel.dispatchEvent(new Event('change')); edKinds(); });
+}
+edKinds();
 
 // Step 1: the listings themselves. Ticks say which ones a bulk change touches; typed values are one-off changes.
 let edOff = new Set(), edTyped = new Map(), edTrInfo = null, edMode = 'bulk';

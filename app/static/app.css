@@ -270,3 +270,8 @@ a.btn{text-decoration:none;display:inline-block}
 .bar span:last-child{text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)}
 .cmt{display:block;font-size:12px;color:var(--muted);font-style:italic;white-space:normal;max-width:320px}
 .form-row input[type=text]#ofMsg{min-height:36px}
+
+.kinds{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
+.kinds button{font:inherit;font-weight:600;cursor:pointer;border-radius:99px;padding:7px 14px;border:1px solid var(--line);background:var(--surface2);color:var(--ink)}
+.kinds button:hover{border-color:var(--accent)}
+.kinds button[aria-checked="true"]{background:var(--accent);border-color:var(--accent);color:#fff}

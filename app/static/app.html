@@ -332,7 +332,8 @@
       <div class="panel" style="margin-top:14px">
         <div class="panel-head"><div><h2>2. Choose what to change on the ticked listings</h2><p id="edHelp"></p></div></div>
         <div class="form-row">
-          <div class="f"><label for="edField">Change</label><select id="edField"><option value="price">Price</option><option value="qty">Quantity</option><option value="title">Title</option><option value="fitment">Title from fitment (automatic)</option><option value="specific">Item specific</option><option value="bestoffer">Best Offer rules</option></select></div>
+          <div class="f" style="flex-basis:100%"><span class="lab" id="edKindsL">What to change</span><div class="kinds" id="edKinds" role="radiogroup" aria-labelledby="edKindsL"></div></div>
+          <div class="f" hidden><label for="edField">Change</label><select id="edField"><option value="price">Price</option><option value="qty">Quantity</option><option value="title">Title</option><option value="fitment">Title from fitment (automatic)</option><option value="specific">Item specific</option><option value="bestoffer">Best Offer rules</option></select></div>
           <div class="ed-opt" data-for="price">
             <div class="f"><label for="edPriceHow">How</label><select id="edPriceHow"><option value="profit">Profit at least £… after ads</option><option value="pct">Change by %</option><option value="add">Change by £</option><option value="set">Set to £</option></select></div>
             <div class="f"><label for="edPriceVal" id="edPriceValL">Minimum profit £</label><input type="number" id="edPriceVal" value="1" step="0.5" style="width:90px"></div>
