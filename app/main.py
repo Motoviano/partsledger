@@ -463,6 +463,10 @@ async def edit_new_job(request: Request):
     for c in changes:
         if c.get("field") not in ED.FIELDS or not c.get("item_id") or c.get("new") in (None, ""):
             raise HTTPException(400, "One of the changes is incomplete.")
+        if c["field"] == "bestoffer":
+            n = c["new"]
+            if not isinstance(n, dict) or "restore" in n or not (0 < float(n.get("decline") or 0) < float(n.get("accept") or 0)):
+                raise HTTPException(400, f"Best Offer prices for {c['item_id']} must have decline below accept.")
         if c["field"] == "price" and not (0.99 <= float(c["new"]) <= 99999):
             raise HTTPException(400, f"Price for {c['item_id']} must be between £0.99 and £99,999.")
         if c["field"] == "qty" and not (0 <= int(c["new"]) <= 99999):

@@ -210,7 +210,7 @@
       <div class="panel" style="margin-top:14px">
         <div class="panel-head"><div><h2>2. Or change all ticked listings at once</h2><p id="edHelp"></p></div></div>
         <div class="form-row">
-          <div class="f"><label for="edField">Change</label><select id="edField"><option value="price">Price</option><option value="qty">Quantity</option><option value="title">Title</option><option value="fitment">Title from fitment (automatic)</option><option value="specific">Item specific</option></select></div>
+          <div class="f"><label for="edField">Change</label><select id="edField"><option value="price">Price</option><option value="qty">Quantity</option><option value="title">Title</option><option value="fitment">Title from fitment (automatic)</option><option value="specific">Item specific</option><option value="bestoffer">Best Offer rules</option></select></div>
           <div class="ed-opt" data-for="price">
             <div class="f"><label for="edPriceHow">How</label><select id="edPriceHow"><option value="profit">Profit at least £… after ads</option><option value="pct">Change by %</option><option value="add">Change by £</option><option value="set">Set to £</option></select></div>
             <div class="f"><label for="edPriceVal" id="edPriceValL">Minimum profit £</label><input type="number" id="edPriceVal" value="1" step="0.5" style="width:90px"></div>
@@ -225,6 +225,12 @@
             <div class="f"><label for="edTitleHow">How</label><select id="edTitleHow"><option value="replace">Replace text</option><option value="start">Add to start</option><option value="end">Add to end</option></select></div>
             <div class="f" id="edFindWrap"><label for="edFind">Find</label><input type="text" id="edFind" style="width:180px"></div>
             <div class="f"><label for="edRepl" id="edReplL">Replace with</label><input type="text" id="edRepl" style="width:180px"></div>
+          </div>
+          <div class="ed-opt" data-for="bestoffer">
+            <div class="f"><label for="edBoAcc">Auto-accept offers up to % below price</label><input type="number" id="edBoAcc" value="10" step="1" min="1" max="50" style="width:90px"></div>
+            <div class="f"><label for="edBoMinP">Decline offers that leave under £ profit</label><input type="number" id="edBoMinP" value="1" step="0.5" min="0" style="width:90px"></div>
+            <div class="f"><label for="edBoAd">Ad rate % to allow for</label><input type="number" id="edBoAd" value="10" step="0.5" min="0" max="50" style="width:80px"></div>
+            <label class="chk"><input type="checkbox" id="edBoOn" checked> Turn Best Offer on where it's off</label>
           </div>
           <div class="ed-opt" data-for="specific">
             <div class="f"><label for="edSpecName">Item specific</label><input type="text" id="edSpecName" list="edSpecList" style="width:210px" placeholder="e.g. Brand"><datalist id="edSpecList">

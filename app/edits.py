@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS edit_items(
   status TEXT DEFAULT 'waiting', message TEXT);
 CREATE INDEX IF NOT EXISTS edit_items_job ON edit_items(job_id);
 """
-FIELDS = {"price", "qty", "title", "specific"}
+FIELDS = {"price", "qty", "title", "specific", "bestoffer"}
 _lock = threading.Lock()
 
 
@@ -132,7 +132,62 @@ def apply_one(token, it):
             raise Skip("Listing already has eBay's maximum of 45 item specifics")
         _write_specifics(token, it["item_id"], specs)
         return f"{name} set to {', '.join(value)}" + (f" (was {', '.join(cur)})" if cur else ""), json.dumps(cur)
+    if f == "bestoffer":
+        cur = _best_offer(token, it["item_id"])
+        if "restore" in new:  # undo: put back exactly what was there
+            want = new["restore"] or {"enabled": False, "accept": None, "decline": None}
+            _write_best_offer(token, it["item_id"], want["enabled"], want.get("accept"), want.get("decline"))
+            return ("Best Offer put back: " + _bo_text(want)), json.dumps(cur)
+        if cur["price"] is not None and (new["accept"] >= cur["price"] or new["decline"] >= cur["price"]):
+            raise Skip(f"Price on eBay is now £{cur['price']:.2f}; the offer prices were worked out for another price. Preview again")
+        if not cur["enabled"] and not new.get("enable", True):
+            raise Skip("Best Offer is off on this listing (and turning it on wasn't ticked)")
+        if cur["enabled"] and cur["accept"] == new["accept"] and cur["decline"] == new["decline"]:
+            raise Skip("Already set like this")
+        _write_best_offer(token, it["item_id"], True, new["accept"], new["decline"])
+        return ("Best Offer " + ("turned on: " if not cur["enabled"] else "set: ") + _bo_text({"enabled": True, **new})
+                + (f" (was {_bo_text(cur)})" if cur["enabled"] else "")), json.dumps(cur)
     raise Skip("Unknown change")
+
+
+def _bo_text(b):
+    if not b or not b.get("enabled"):
+        return "off"
+    parts = []
+    if b.get("accept"):
+        parts.append(f"accept from £{b['accept']:.2f}")
+    if b.get("decline"):
+        parts.append(f"decline below £{b['decline']:.2f}")
+    return ", ".join(parts) or "on, no automatic answers"
+
+
+def _best_offer(token, item_id):
+    """Current Best Offer settings of a listing."""
+    def b(root):
+        EB._el(root, "ItemID", item_id)
+        EB._el(root, "DetailLevel", "ReturnAll")
+    it = EB.trading("GetItem", token, b).find(N + "Item")
+    num = lambda p: float(it.findtext(p)) if it.findtext(p) else None
+    return {"enabled": (it.findtext(f"{N}BestOfferDetails/{N}BestOfferEnabled") or "").lower() == "true",
+            "accept": num(f"{N}ListingDetails/{N}BestOfferAutoAcceptPrice"),
+            "decline": num(f"{N}ListingDetails/{N}MinimumBestOfferPrice"),
+            "price": num(f"{N}StartPrice") or num(f"{N}SellingStatus/{N}CurrentPrice")}
+
+
+def _write_best_offer(token, item_id, enabled, accept, decline):
+    root = ET.Element(N + "ReviseFixedPriceItemRequest")
+    item = EB._el(root, "Item")
+    EB._el(item, "ItemID", item_id)
+    EB._el(EB._el(item, "BestOfferDetails"), "BestOfferEnabled", "true" if enabled else "false")
+    if enabled and (accept or decline):
+        ld = EB._el(item, "ListingDetails")
+        for tag, v in (("BestOfferAutoAcceptPrice", accept), ("MinimumBestOfferPrice", decline)):
+            if v:
+                EB._el(ld, tag, f"{float(v):.2f}").set("currencyID", "GBP")
+    for tag, v in (("BestOfferAutoAcceptPrice", accept), ("MinimumBestOfferPrice", decline)):
+        if not enabled or not v:
+            EB._el(root, "DeletedField", f"Item.ListingDetails.{tag}")
+    return EB.trading("ReviseFixedPriceItem", token, root_el=root)
 
 
 def _update_local(con, it):
@@ -194,7 +249,9 @@ def undo_changes(con, job_id):
     for r in con.execute("SELECT * FROM edit_items WHERE job_id=? AND status='ok' ORDER BY id", (job_id,)):
         old = json.loads(r["old_value"]) if r["old_value"] else None
         new = json.loads(r["new_value"])
-        if r["field"] == "specific":
+        if r["field"] == "bestoffer":
+            out.append({**dict(r), "old": new, "new": {"restore": old}})
+        elif r["field"] == "specific":
             restore = {"name": new["name"], "restore": old}
             out.append({**dict(r), "old": new.get("value") if "value" in new else new.get("restore"), "new": restore})
         elif old is not None:

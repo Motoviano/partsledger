@@ -507,6 +507,7 @@ function edShowOpts() {
     price: how === 'profit' ? 'Works out the lowest price that leaves this profit after COGS, postage (your average label cost for the SKU), eBay fees (each account\'s own rate over the last 90 days) and ads.' : 'Changes the Buy It Now price.',
     qty: 'Sets the quantity available. 0 keeps the listing but shows it as out of stock (if out-of-stock control is on in eBay). For SKUs in Stock sync, change the stock number on the Stock sync page instead, or the sync will put it back.',
     title: 'eBay titles can be up to 80 characters. Listings that would go over are left out.',
+    bestoffer: 'Buyers\' offers at or above the accept price are accepted at once; offers below the decline price are declined at once (so no sale can leave less than your minimum profit after COGS, postage, eBay fees and ads). Offers in between wait for you in Seller Hub. The current Best Offer settings are read from eBay first, so Undo puts them back.',
     fitment: 'Reads each ticked listing\'s fitment rows and item specifics from eBay, then adds what the title is missing: make and model, the year range (e.g. 2012-2023, after the model and platform such as MK8) and the OE number. Nothing is removed and titles stay within 80 characters. Up to 500 listings at a time.',
     specific: 'Adds or changes one item specific. The listing\'s other specifics stay as they are. Several values: separate them with |.',
   }[fld];
@@ -623,6 +624,7 @@ $('edPreview').onclick = () => {
   const picked = edPicked().filter(r => !edOff.has(edKey(r))), fld = $('edField').value;
   if (!picked.length) return toast('No listings are ticked in step 1.');
   if (fld === 'fitment') return edFitment(picked);
+  if (fld === 'bestoffer') return edBestOffer(picked);
   const pf = edProfitFn(), out = [];
   let same = 0;
   for (const r of picked) {
@@ -704,14 +706,34 @@ async function edFitment(picked) {
   edMode = 'fitment';
   edShowPreview(out, same, 'titles can be improved from fitment');
 }
-const FLD_NAME = { price: 'Price', qty: 'Stock', title: 'Title', specific: 'Item specific' };
-function edFmt(fld, v) { return v == null ? '–' : fld === 'price' ? gbp(v) : fld === 'qty' ? n0(v) : fld === 'specific' ? `${esc(v.name)}: <b>${esc(v.value)}</b>` : esc(v); }
+const FLD_NAME = { price: 'Price', qty: 'Stock', title: 'Title', specific: 'Item specific', bestoffer: 'Best Offer' };
+const boText = v => !v ? '–' : v.restore !== undefined ? boText(v.restore || { enabled: false }) : v.enabled === false ? 'off' :
+  [v.accept ? `accept from ${gbp(v.accept)}` : '', v.decline ? `decline below ${gbp(v.decline)}` : ''].filter(Boolean).join(' · ') || 'on';
+function edBestOffer(picked) {
+  const pf = edProfitFn(), acc = (+$('edBoAcc').value || 0) / 100, minP = +$('edBoMinP').value || 0, ad = (+$('edBoAd').value || 0) / 100, on = $('edBoOn').checked;
+  const ceil2 = v => Math.ceil(v * 100 - 1e-6) / 100, floor2 = v => Math.floor(v * 100 + 1e-6) / 100;
+  const out = [];
+  for (const r of picked) {
+    const price = r.price || 0, fr = pf.R.fee(r.a), po = pf.R.post(r.sku, r.g), k = 1 - fr - ad;
+    const c = costAt(pf.cmap, r.sku, price);  // what the part cost: an offer doesn't change it, so the band comes from the listing price
+    if (!c) { out.push({ ...r, fld: 'bestoffer', cur: null, nv: null, ok: false, note: 'No cost for this SKU. Add it on the COGS page.' }); continue; }
+    const fl = (minP + c.c + po) / k;
+    const decline = ceil2(fl), accept = Math.max(floor2(price * (1 - acc)), ceil2(decline + 0.01));
+    const prof = p => p * k - c.c - po;
+    if (accept >= price || decline >= price) { out.push({ ...r, fld: 'bestoffer', cur: null, nv: null, ok: false, note: `Price ${gbp(price)} is too close to the ${gbp(decline)} floor for Best Offer` }); continue; }
+    out.push({ ...r, fld: 'bestoffer', cur: null, nv: { accept, decline, enable: on }, ok: true,
+      note: `Accept from ${gbp(accept)} (${((1 - accept / price) * 100).toFixed(0)}% off, profit about ${gbp(prof(accept))}) · decline below ${gbp(decline)} (keeps ${gbp(minP)}) · cost ${gbp(c.c)}${c.src === 'band' ? ' (band)' : ''}, postage ${gbp(po)}, fees ${(fr * 100).toFixed(1)}%, ads ${(ad * 100).toFixed(0)}%` });
+  }
+  edMode = 'bestoffer';
+  edShowPreview(out, 0, 'listings get Best Offer rules');
+}
+function edFmt(fld, v) { return v == null ? '–' : fld === 'bestoffer' ? esc(boText(v)) : fld === 'price' ? gbp(v) : fld === 'qty' ? n0(v) : fld === 'specific' ? `${esc(v.name)}: <b>${esc(v.value)}</b>` : esc(v); }
 function drawEdit() {
   const cols = [
     { h: `<input type="checkbox" id="edAll" aria-label="Select all" checked>`, l: 1, v: () => 0, f: r => `<input type="checkbox" class="ed-sel" data-k="${r.aid}|${esc(r.id)}|${r.fld}" ${r.ok ? 'checked' : 'disabled'} aria-label="Select ${esc(r.sku || r.id)}">` },
     { h: 'Listing', l: 1, cl: 'prod', v: r => r.sku, f: r => `<span class="t">${esc(r.fld === 'title' ? r.cur : r.t)}</span><span class="s"><span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)} · ${esc(r.sku || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(r.id)}" target="_blank" rel="noopener">${esc(r.id)}</a></span>` },
     { h: 'Change', l: 1, v: r => r.fld, f: r => FLD_NAME[r.fld] },
-    { h: 'Now', l: 1, cl: 'prod', v: r => typeof r.cur === 'number' ? r.cur : String(r.cur ?? ''), f: r => r.fld === 'specific' ? '<span class="muted">read when applied</span>' : r.fld === 'title' ? `<span class="oldv">${esc(r.cur)}</span>` : edFmt(r.fld, r.cur) },
+    { h: 'Now', l: 1, cl: 'prod', v: r => typeof r.cur === 'number' ? r.cur : String(r.cur ?? ''), f: r => r.fld === 'specific' || r.fld === 'bestoffer' ? '<span class="muted">read when applied</span>' : r.fld === 'title' ? `<span class="oldv">${esc(r.cur)}</span>` : edFmt(r.fld, r.cur) },
     { h: 'New', l: 1, cl: 'prod', v: r => typeof r.nv === 'number' ? r.nv : String(r.nv ?? ''), f: r => `<b>${edFmt(r.fld, r.nv)}</b>` },
     { h: 'Notes', l: 1, cl: 'prod', v: r => r.note, f: r => `<span class="${r.ok ? 'muted' : 'neg'}">${esc(r.note)}</span>` }];
   table($('edTable'), cols, edRows, null, edState);
@@ -736,7 +758,7 @@ $('edApply').onclick = async () => {
   const nList = new Set(ch.map(x => x.aid + '|' + x.id)).size;
   if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = `Click again to change ${n0(nList)} live listings`; setTimeout(() => { b.dataset.sure = ''; b.textContent = 'Apply to eBay'; }, 6000); return; }
   b.dataset.sure = ''; b.textContent = 'Apply to eBay';
-  const summary = edMode === 'fitment' ? 'Title from fitment (years, make/model, OE)' : edMode === 'typed' ? `Typed changes on ${nList} listing${nList === 1 ? '' : 's'}`
+  const summary = edMode === 'bestoffer' ? `Best Offer: accept up to ${$('edBoAcc').value}% off, decline below the £${$('edBoMinP').value} profit floor` : edMode === 'fitment' ? 'Title from fitment (years, make/model, OE)' : edMode === 'typed' ? `Typed changes on ${nList} listing${nList === 1 ? '' : 's'}`
     : fld === 'price' ? { profit: `Price: profit at least £${$('edPriceVal').value} after ${$('edAd').value}% ads`, pct: `Price ${$('edPriceVal').value}%`, add: `Price ${$('edPriceVal').value >= 0 ? '+' : ''}£${$('edPriceVal').value}`, set: `Price set to £${$('edPriceVal').value}` }[$('edPriceHow').value]
     : fld === 'qty' ? `Quantity set to ${$('edQty').value}` : fld === 'title' ? `Title: ${$('edTitleHow').selectedOptions[0].text.toLowerCase()} "${$('edTitleHow').value === 'replace' ? $('edFind').value + '" → "' + $('edRepl').value : $('edRepl').value}"`
     : `${$('edSpecName').value} = ${$('edSpecVal').value} (${$('edSpecMode').value === 'missing' ? 'where missing' : 'all'})`;
@@ -764,7 +786,7 @@ async function renderEditJobs() {
 async function showEditJob(id) {
   clearTimeout(edJobTimer);
   const { job, items } = await api('/api/edit/jobs/' + id), run = job.status === 'running' || job.status === 'queued';
-  const fmt = (f, v) => { try { v = JSON.parse(v); } catch (e) { } return f === 'specific' ? (v && v.name ? `${esc(v.name)}: ${esc(v.value ?? (v.restore ? v.restore.join(', ') : 'not set'))}` : Array.isArray(v) ? esc(v.join(', ')) : '–') : edFmt(f, v); };
+  const fmt = (f, v) => { try { v = JSON.parse(v); } catch (e) { } return f === 'bestoffer' ? esc(boText(v)) : f === 'specific' ? (v && v.name ? `${esc(v.name)}: ${esc(v.value ?? (v.restore ? v.restore.join(', ') : 'not set'))}` : Array.isArray(v) ? esc(v.join(', ')) : '–') : edFmt(f, v); };
   $('edJob').innerHTML = `<div class="panel-head"><div><h2>#${job.id}: ${esc(job.summary)}</h2><p>${job.done} of ${job.total} done · ${job.ok} changed · ${job.skipped} skipped · ${job.failed} failed · ${run ? 'working…' : esc(job.status)}</p></div></div>
     <div class="tbl-wrap"><table><thead><tr><th class="l">Account</th><th class="l">Listing</th><th class="l">Before</th><th class="l">After</th><th class="l">Result</th></tr></thead><tbody>${items.map(i => `<tr>
       <td class="l">${esc(i.account)}</td><td class="l prod"><span class="t">${esc(i.title || '')}</span><span class="s">${esc(i.sku || '')} · <a href="https://www.ebay.co.uk/itm/${esc(i.item_id)}" target="_blank" rel="noopener">${esc(i.item_id)}</a></span></td>
