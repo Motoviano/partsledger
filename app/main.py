@@ -1,4 +1,5 @@
 import json
+import re
 from collections import defaultdict
 import os
 import secrets
@@ -1387,17 +1388,18 @@ def ebay_policies(account_id: int, request: Request):
 @app.get("/api/ebay/candidates")
 def ebay_candidates(request: Request, source: int, target: int, prefix: str = ""):
     need_user(request)
-    pre = prefix.strip().upper()
+    pres = [p for p in re.split(r"[\s,]+", prefix.strip().upper()) if p]  # several allowed: "GRLL, CHRM"
     with DB.db() as con:
-        have = {(r["sku"] or "").upper() for r in con.execute("SELECT sku FROM listings WHERE account_id=?", (target,))}
+        live_t = set(EB.active_listing_ids(con, target)); live_s = set(EB.active_listing_ids(con, source))
+        have = {(r["sku"] or "").upper() for r in con.execute("SELECT item_id,sku FROM listings WHERE account_id=?", (target,)) if r["item_id"] in live_t}
         rows = [dict(r) for r in con.execute(
-            "SELECT item_id,sku,title,price,qty,sold FROM listings WHERE account_id=? AND COALESCE(qty,1)>0 ORDER BY sku,price", (source,))]
+            "SELECT item_id,sku,title,price,qty,sold FROM listings WHERE account_id=? AND COALESCE(qty,1)>0 ORDER BY sku,price", (source,)) if r["item_id"] in live_s]
         done = {r["item_id"] for r in con.execute(
             "SELECT i.item_id FROM ebay_job_items i JOIN ebay_jobs j ON j.id=i.job_id WHERE j.mode='copy' AND j.target_id=? AND i.status='ok'", (target,))}
     out, seen = [], set()
     for r in rows:
         s = (r["sku"] or "").upper()
-        if not s or (pre and not s.startswith(pre)) or s in have or r["item_id"] in done:
+        if not s or (pres and not any(s.startswith(p) for p in pres)) or s in have or r["item_id"] in done:
             continue
         r["dupe_in_source"] = s in seen
         seen.add(s)

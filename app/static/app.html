@@ -27,6 +27,7 @@
       <button data-page="charts"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span>Charts</span></button>
       <div class="nav-h" role="presentation">Listings</div>
       <button data-page="edit"><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg><span>Bulk edit</span></button>
+      <button data-page="copy"><svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2h2"/></svg><span>Copy listings</span></button>
       <button data-page="stock"><svg viewBox="0 0 24 24"><path d="M3 8l9-5 9 5v8l-9 5-9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg><span>Stock sync</span></button>
       <button data-page="traffic"><svg viewBox="0 0 24 24"><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span>Traffic</span></button>
       <button data-page="fitment"><svg viewBox="0 0 24 24"><path d="M5 17h14l-1.5-6h-11z"/><path d="M7 11l2-4h6l2 4"/><circle cx="8" cy="17.5" r="1.8"/><circle cx="16" cy="17.5" r="1.8"/><path d="M15 3l2 2 4-4" transform="translate(0 1)"/></svg><span>Fitment</span></button>
@@ -179,28 +180,28 @@
     <section id="p-compete" data-p hidden>
       <div class="panel">
         <div class="panel-head"><div><h2>Competitor prices</h2><p>The app searches eBay UK for the same part from other sellers: by the OE / part number in your item specifics, or by the title when there isn't one. Prices include postage. Your own three accounts are left out. A suggested price never goes below the price that keeps your minimum profit.</p></div>
-          <button class="btn" type="button" id="cpAuto"></button></div>
+          <button class="btn" type="button" id="cmAuto"></button></div>
         <div class="form-row">
-          <div class="f"><label for="cpCut">Be cheaper by £</label><input type="number" id="cpCut" step="0.01" min="0" style="width:80px"></div>
-          <div class="f"><label for="cpMinP">Keep at least £ profit</label><input type="number" id="cpMinP" step="0.5" min="0" style="width:90px"></div>
-          <div class="f"><label for="cpRaise">Suggest a higher price when you're cheapest by more than %</label><input type="number" id="cpRaise" step="1" min="0" style="width:80px"></div>
-          <div class="f"><label for="cpDaily">Listings to check each day (automatic)</label><input type="number" id="cpDaily" step="50" min="0" max="4500" style="width:100px"></div>
-          <button class="btn" type="button" id="cpSave">Save settings</button>
+          <div class="f"><label for="cmCut">Be cheaper by £</label><input type="number" id="cmCut" step="0.01" min="0" style="width:80px"></div>
+          <div class="f"><label for="cmMinP">Keep at least £ profit</label><input type="number" id="cmMinP" step="0.5" min="0" style="width:90px"></div>
+          <div class="f"><label for="cmRaise">Suggest a higher price when you're cheapest by more than %</label><input type="number" id="cmRaise" step="1" min="0" style="width:80px"></div>
+          <div class="f"><label for="cmDaily">Listings to check each day (automatic)</label><input type="number" id="cmDaily" step="50" min="0" max="4500" style="width:100px"></div>
+          <button class="btn" type="button" id="cmSave">Save settings</button>
         </div>
-        <p class="muted" id="cpStatus" style="padding:0 16px 14px;margin:0"></p>
+        <p class="muted" id="cmStatus" style="padding:0 16px 14px;margin:0"></p>
       </div>
-      <div class="stats" id="cpStats" style="margin-top:14px"></div>
+      <div class="stats" id="cmStats" style="margin-top:14px"></div>
       <div class="panel" style="margin-top:14px">
-        <div class="panel-head"><div><h2>Your listings against other sellers</h2><p id="cpSub"></p><p class="muted" style="margin:4px 0 0">Check only searches eBay for the listings shown: narrow them first with SKU starts with (several: CHRM, GRLL), the product groups at the top, or Top 50 sellers. Each listing is one eBay search.</p></div>
+        <div class="panel-head"><div><h2>Your listings against other sellers</h2><p id="cmSub"></p><p class="muted" style="margin:4px 0 0">Check only searches eBay for the listings shown: narrow them first with SKU starts with (several: CHRM, GRLL), the product groups at the top, or Top 50 sellers. Each listing is one eBay search.</p></div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-            <select id="cpView" aria-label="Show"><option value="all">All listings</option><option value="match">Cheaper sellers: can match</option><option value="lower">Cheaper sellers: can get closer</option><option value="cant">Cheaper sellers: below your safe price</option><option value="raise">You're cheapest: can go up</option><option value="cheapest">You're cheapest</option><option value="nocost">No cost entered</option><option value="unchecked">Not checked yet</option></select>
-            <input type="text" id="cpPrefix" placeholder="SKU starts with, e.g. CHRM" aria-label="SKU starts with" style="width:190px">
-            <input type="search" id="cpSearch" placeholder="Title or SKU contains" aria-label="Title or SKU contains" style="width:170px">
-            <select id="cpWhich" aria-label="Which listings"><option value="all">All listings</option><option value="stock">In stock</option><option value="sold">Sold at least once</option><option value="top">Top 50 sellers</option></select>
-            <span class="muted" id="cpSel"></span>
-            <button class="btn" type="button" id="cpCheck">Check these listings</button>
-            <button class="btn primary" type="button" id="cpApply" disabled>Change prices</button></div></div>
-        <div class="tbl-wrap"><table id="cpTable"></table></div>
+            <select id="cmView" aria-label="Show"><option value="all">All listings</option><option value="match">Cheaper sellers: can match</option><option value="lower">Cheaper sellers: can get closer</option><option value="cant">Cheaper sellers: below your safe price</option><option value="raise">You're cheapest: can go up</option><option value="cheapest">You're cheapest</option><option value="nocost">No cost entered</option><option value="unchecked">Not checked yet</option></select>
+            <input type="text" id="cmPrefix" placeholder="SKU starts with, e.g. CHRM" aria-label="SKU starts with" style="width:190px">
+            <input type="search" id="cmSearch" placeholder="Title or SKU contains" aria-label="Title or SKU contains" style="width:170px">
+            <select id="cmWhich" aria-label="Which listings"><option value="all">All listings</option><option value="stock">In stock</option><option value="sold">Sold at least once</option><option value="top">Top 50 sellers</option></select>
+            <span class="muted" id="cmSel"></span>
+            <button class="btn" type="button" id="cmCheck">Check these listings</button>
+            <button class="btn primary" type="button" id="cmApply" disabled>Change prices</button></div></div>
+        <div class="tbl-wrap"><table id="cmTable"></table></div>
       </div>
     </section>
 
@@ -245,6 +246,33 @@
       <div class="panel" style="margin-top:14px">
         <div class="panel-head"><div><h2>Recent alerts</h2><p>The last 100, newest first.</p></div></div>
         <div class="tbl-wrap"><table id="alLog"></table></div>
+      </div>
+    </section>
+
+    <section id="p-copy" data-p hidden>
+      <div class="panel">
+        <div class="panel-head"><div><h2>Copy listings to another account</h2><p>Copies title, description, photos, item specifics and every fitment row. Postage, returns and payment use the other account's own policies. <b>1.</b> Choose the accounts and a SKU start (leave it empty for all), then click Show listings. <b>2.</b> Tick the ones to copy and set the price. <b>3.</b> Check selected tests them with eBay without listing anything; Copy selected lists them.</p></div></div>
+        <div class="form-row">
+          <div class="f"><label for="cpFrom">Copy from</label><select id="cpFrom"></select></div>
+          <div class="f"><label for="cpTo">Copy to</label><select id="cpTo"></select></div>
+          <div class="f"><label for="cpPrefix">SKU starts with</label><input type="text" id="cpPrefix" placeholder="e.g. GRLL (empty = all)" style="width:170px"></div>
+          <button class="btn" type="button" id="cpLoad">Show listings not on that account</button>
+        </div>
+        <div class="form-row" style="padding-top:0">
+          <div class="f"><label for="cpPriceKind">Price on the new account</label>
+            <select id="cpPriceKind"><option value="same">Same price</option><option value="pct">Change by %</option><option value="add">Add or take off £</option></select></div>
+          <div class="f"><label for="cpPriceVal">Amount</label><input type="number" id="cpPriceVal" value="0" step="0.5" style="width:90px"></div>
+          <div class="f"><label for="cpShip">Postage policy</label><select id="cpShip"></select></div>
+          <div class="f"><label for="cpRet">Returns policy</label><select id="cpRet"></select></div>
+          <div class="f"><label for="cpPay">Payment policy</label><select id="cpPay"></select></div>
+        </div>
+        <div class="tbl-wrap"><table id="cpTable"></table></div>
+        <div class="form-row">
+          <span class="muted" id="cpCount"></span>
+          <button class="btn" type="button" id="cpVerify">Check selected (nothing is listed)</button>
+          <button class="btn primary" type="button" id="cpCopy">Copy selected</button>
+        </div>
+        <div id="cpJob"></div>
       </div>
     </section>
 
@@ -505,30 +533,7 @@
         <p class="notice" id="ebaySetup" style="margin:14px" hidden></p>
         <div class="tbl-wrap"><table id="ebayAcc"></table></div>
       </div>
-      <div class="panel" style="margin-top:18px">
-        <div class="panel-head"><div><h2>Copy listings to another account</h2><p>Copies title, description, photos, item specifics and every fitment row. Postage, returns and payment use the other account's own policies.</p></div></div>
-        <div class="form-row">
-          <div class="f"><label for="cpFrom">Copy from</label><select id="cpFrom"></select></div>
-          <div class="f"><label for="cpTo">Copy to</label><select id="cpTo"></select></div>
-          <div class="f"><label for="cpPrefix">SKU starts with</label><input type="text" id="cpPrefix" value="GRLL" style="width:110px"></div>
-          <button class="btn" type="button" id="cpLoad">Show listings not on that account</button>
-        </div>
-        <div class="form-row" style="padding-top:0">
-          <div class="f"><label for="cpPriceKind">Price on the new account</label>
-            <select id="cpPriceKind"><option value="same">Same price</option><option value="pct">Change by %</option><option value="add">Add or take off £</option></select></div>
-          <div class="f"><label for="cpPriceVal">Amount</label><input type="number" id="cpPriceVal" value="0" step="0.5" style="width:90px"></div>
-          <div class="f"><label for="cpShip">Postage policy</label><select id="cpShip"></select></div>
-          <div class="f"><label for="cpRet">Returns policy</label><select id="cpRet"></select></div>
-          <div class="f"><label for="cpPay">Payment policy</label><select id="cpPay"></select></div>
-        </div>
-        <div class="tbl-wrap"><table id="cpTable"></table></div>
-        <div class="form-row">
-          <span class="muted" id="cpCount"></span>
-          <button class="btn" type="button" id="cpVerify">Check selected (nothing is listed)</button>
-          <button class="btn primary" type="button" id="cpCopy">Copy selected</button>
-        </div>
-        <div id="cpJob"></div>
-      </div>
+
       <div class="panel" style="margin-top:18px">
         <div class="panel-head"><div><h2>Promoted Listings rates</h2><p>Upload a file with Account, Item number and Ad rate. Each account gets a General campaign called "Partsledger General"; listings are added to it at their own rate.</p></div>
           <div style="display:flex;gap:8px;align-items:center"><label class="btn" for="adFile">Upload ad rates</label><input id="adFile" type="file" accept=".csv,.xlsx" hidden></div></div>
