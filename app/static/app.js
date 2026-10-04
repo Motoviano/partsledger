@@ -1805,13 +1805,97 @@ $('ssRefresh').onclick = async () => {
   b.disabled = false; b.textContent = 'Refresh from eBay';
 };
 
+// ---------------------------------------------------------------- alerts
+let ALD = null, alMine = null;
+const alSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const alIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const alStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+function alDeviceName() {
+  const u = navigator.userAgent;
+  const os = /iPhone/.test(u) ? 'iPhone' : /iPad/.test(u) ? 'iPad' : /Android/.test(u) ? 'Android' : /Mac/.test(u) ? 'Mac' : /Windows/.test(u) ? 'Windows' : 'Computer';
+  const br = /Edg\//.test(u) ? 'Edge' : /Chrome\//.test(u) && !/Edg\//.test(u) ? 'Chrome' : /Firefox\//.test(u) ? 'Firefox' : /Safari\//.test(u) ? 'Safari' : 'Browser';
+  return `${os} · ${br}`;
+}
+function alKey(b64) { const p = '='.repeat((4 - b64.length % 4) % 4), raw = atob((b64 + p).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(raw, c => c.charCodeAt(0)); }
+async function alReg() { return navigator.serviceWorker.register('/sw.js', { scope: '/' }); }
+async function alCurrent() {
+  if (!alSupported()) return null;
+  try { const r = await navigator.serviceWorker.getRegistration('/'); return r ? await r.pushManager.getSubscription() : null; } catch (e) { return null; }
+}
+async function renderAlerts() {
+  try { ALD = await api('/api/alerts'); } catch (e) { toast(e.message); return; }
+  const cur = await alCurrent();
+  alMine = cur ? ALD.subs.find(s => s.endpoint === cur.endpoint) : null;
+  const box = $('alDevice');
+  if (!alSupported()) {
+    box.innerHTML = alIOS() && !alStandalone()
+      ? `<p><b>On iPhone and iPad, alerts work once Partsledger is on your Home Screen.</b></p><ol style="margin:6px 0 0;padding-left:20px"><li>In Safari, tap the Share button, then <b>Add to Home Screen</b>.</li><li>Open Partsledger from the new icon and log in.</li><li>Come back to this page and tap <b>Turn on alerts</b>.</li></ol>`
+      : '<p>This browser can\'t show alerts. Use Chrome, Edge, Firefox or Safari (on iPhone, from the Home Screen).</p>';
+  } else if (Notification.permission === 'denied') {
+    box.innerHTML = '<p class="neg">Notifications are blocked for this site in this browser. Allow them in the browser\'s site settings, then reload this page.</p>';
+  } else if (!alMine) {
+    box.innerHTML = `<p>Alerts are <b>off</b> on this device (${esc(alDeviceName())}).</p><button class="btn primary" type="button" id="alOn">Turn on alerts on this device</button>`;
+    $('alOn').onclick = alTurnOn;
+  } else {
+    const p = alMine.prefs;
+    box.innerHTML = `<p><span class="chip k">On</span> on this device (${esc(alMine.device || alDeviceName())}).</p>
+      <div class="form-row" style="padding:6px 0 0">${Object.entries(ALD.kinds).map(([k, l]) => `<label class="chk" style="display:flex;gap:6px;align-items:center"><input type="checkbox" class="al-pref" data-k="${k}" ${p[k] ? 'checked' : ''}> ${esc(l)}</label>`).join('')}
+        <div class="f"><label for="alMin">Only sales of at least £</label><input type="number" id="alMin" min="0" step="1" value="${+p.min_sale || 0}" style="width:90px"></div>
+        <button class="btn" type="button" id="alTest">Send a test alert</button><button class="btn" type="button" id="alOff">Turn off on this device</button></div>`;
+    box.querySelectorAll('.al-pref').forEach(c => c.onchange = () => alPrefs({ [c.dataset.k]: c.checked }));
+    $('alMin').onchange = () => alPrefs({ min_sale: +$('alMin').value || 0 });
+    $('alTest').onclick = async () => { try { await post('/api/alerts/test', { id: alMine.id }); toast('Test alert sent: it should appear in a few seconds'); } catch (e) { toast(e.message); } };
+    $('alOff').onclick = alTurnOff;
+  }
+  const st = { on: ['On', 'k'], off: ['Off', 'b'], error: ['Error', 'm'] };
+  $('alAcc').innerHTML = `<thead><tr><th class="l">Account</th><th class="l">Instant from eBay</th><th class="l">Last nudge from eBay</th></tr></thead><tbody>${ALD.accounts.map(a => `<tr>
+    <td class="l">${esc(a.name)}</td><td class="l">${a.notify_status ? `<span class="chip ${st[a.notify_status][1]}">${st[a.notify_status][0]}</span> <span class="muted">${esc(a.notify_message || '')}</span>` : '<span class="muted">Not turned on: alerts come from the 2-minute check</span>'}</td>
+    <td class="l muted">${a.last_poke ? ago(a.last_poke) + ` · ${n0(a.pokes)} so far` : '–'}</td></tr>`).join('')}</tbody>`;
+  $('alSubs').innerHTML = ALD.subs.length ? `<thead><tr><th class="l">Device</th><th class="l">Who</th><th class="l">Gets</th><th class="l">Last alert delivered</th><th></th></tr></thead><tbody>${ALD.subs.map(s => `<tr>
+    <td class="l">${esc(s.device || 'Device')}${alMine && alMine.id === s.id ? ' <span class="chip b">this one</span>' : ''}</td><td class="l">${esc((s.user_email || '').split('@')[0])}</td>
+    <td class="l muted">${Object.entries(ALD.kinds).filter(([k]) => s.prefs[k]).map(([, l]) => esc(l)).join(', ') || 'nothing'}${s.prefs.min_sale ? ` · sales from £${s.prefs.min_sale}` : ''}</td>
+    <td class="l">${s.last_ok ? ago(s.last_ok) : '<span class="muted">not yet</span>'}${s.fails ? `<span class="sub neg">${esc(s.last_error || '')}</span>` : ''}</td>
+    <td><button class="link al-rm" type="button" data-id="${s.id}">Remove</button></td></tr>`).join('')}</tbody>` : '<tbody><tr><td class="empty">No devices yet. Turn alerts on above, on your phone and on your computer.</td></tr></tbody>';
+  $('alSubs').querySelectorAll('.al-rm').forEach(b => b.onclick = async () => { try { await post('/api/alerts/remove', { id: +b.dataset.id }); renderAlerts(); } catch (e) { toast(e.message); } });
+  const kc = { sale: 'k', question: 'b', return: 'ret', standards: 'm' };
+  $('alLog').innerHTML = ALD.log.length ? `<thead><tr><th class="l">When (UTC)</th><th class="l">What</th><th class="l">Alert</th><th>Devices</th></tr></thead><tbody>${ALD.log.map(l => `<tr>
+    <td class="l">${esc((l.at || '').slice(0, 16))}${l.source === 'instant' ? '<span class="sub">instant</span>' : ''}</td><td class="l"><span class="chip ${kc[l.kind] || 'b'}">${esc(ALD.kinds[l.kind] || l.kind)}</span></td>
+    <td class="l prod"><a href="${esc(l.url || '#')}" onclick="show('${esc((l.url || '#').split('#')[1] || 'dash')}');return false"><span class="t">${esc(l.title || '')}</span></a><span class="s">${esc(l.body || '')}</span></td><td>${n0(l.sent)}</td></tr>`).join('')}</tbody>` : '<tbody><tr><td class="empty">No alerts yet.</td></tr></tbody>';
+}
+async function alTurnOn() {
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { toast('Notifications weren\'t allowed, so alerts can\'t be shown on this device.'); renderAlerts(); return; }
+    const reg = await alReg(); await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: alKey(ALD.key) });
+    const r = await post('/api/alerts/subscribe', { subscription: sub.toJSON(), device: alDeviceName() });
+    toast(r.delivered ? 'Alerts are on. A first alert is on its way.' : 'Alerts are on, but the first alert didn\'t go through; try Send a test alert.');
+  } catch (e) { toast('Couldn\'t turn alerts on: ' + e.message); }
+  renderAlerts();
+}
+async function alTurnOff() {
+  try { const sub = await alCurrent(); if (sub) { await post('/api/alerts/remove', { endpoint: sub.endpoint }); await sub.unsubscribe(); } toast('Alerts are off on this device'); } catch (e) { toast(e.message); }
+  renderAlerts();
+}
+async function alPrefs(p) { try { await post('/api/alerts/prefs', { id: alMine.id, prefs: p }); renderAlerts(); } catch (e) { toast(e.message); } }
+async function alEbay(enable) {
+  const b = enable ? $('alEbayOn') : $('alEbayOff'); b.disabled = true;
+  try { await post('/api/alerts/ebay', { enable, accounts: ALD.accounts.map(a => a.id) }); toast(enable ? 'eBay will now tell the app straight away' : 'Instant notifications turned off'); } catch (e) { toast(e.message); }
+  b.disabled = false; renderAlerts();
+}
+$('alEbayOn').onclick = () => alEbay(true);
+$('alEbayOff').onclick = () => alEbay(false);
+if (alSupported()) navigator.serviceWorker.getRegistration('/').then(r => r && r.update()).catch(() => { });
+window.addEventListener('hashchange', () => { const h = location.hash.slice(1); if (titles[h] && h !== page) show(h); });
+
 // ---------------------------------------------------------------- wiring
-const titles = { dash: 'Dashboard', orders: 'Sold items', traffic: 'Traffic', edit: 'Bulk edit', stock: 'Stock sync', msgs: 'Messages', ads: 'Ads', returns: 'Returns', payouts: 'Payouts', offers: 'Offers', promos: 'Discounts', compete: 'Competitors', fitment: 'Fitment', standards: 'Seller standards', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
+const titles = { dash: 'Dashboard', orders: 'Sold items', traffic: 'Traffic', edit: 'Bulk edit', stock: 'Stock sync', msgs: 'Messages', ads: 'Ads', returns: 'Returns', payouts: 'Payouts', offers: 'Offers', promos: 'Discounts', compete: 'Competitors', fitment: 'Fitment', standards: 'Seller standards', alerts: 'Alerts', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
 let page = 'dash';
 function show(p) {
   page = p; document.querySelectorAll('[data-p]').forEach(s => s.hidden = s.id !== 'p-' + p);
   document.querySelectorAll('#nav button').forEach(b => b.dataset.page === p ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current'));
-  $('pageTitle').textContent = titles[p]; $('filters').hidden = p === 'uploads' || p === 'users' || p === 'ebay';
+  $('pageTitle').textContent = titles[p]; $('filters').hidden = p === 'uploads' || p === 'users' || p === 'ebay' || p === 'alerts';
   renderAll(); try { history.replaceState(null, '', '#' + p); } catch (e) { }
 }
 document.querySelectorAll('#nav button').forEach(b => b.onclick = () => show(b.dataset.page));
@@ -1833,6 +1917,7 @@ function renderAll() {
   if (page === 'compete') renderCompete();
   if (page === 'fitment') renderFitment();
   if (page === 'standards') renderStandards();
+  if (page === 'alerts') renderAlerts();
   if (page === 'cogs') { renderBands(); renderCogs(); }
   if (page === 'charts') renderCharts();
   if (page === 'uploads') renderUploads();

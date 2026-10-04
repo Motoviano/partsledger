@@ -8,6 +8,12 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Source+Sans+3:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="/static/app.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Partsledger">
+<meta name="theme-color" content="#1F2522">
 </head>
 <body>
 <div class="app">
@@ -32,6 +38,7 @@
       <button data-page="charts"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span>Charts</span></button>
       <button data-page="uploads"><svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg><span>Uploads</span></button>
       <button data-page="ebay"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/><circle cx="19" cy="17" r="2.5"/></svg><span>eBay</span></button>
+      <button data-page="alerts"><svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 0112 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 003.4 0"/></svg><span>Alerts</span></button>
       <button data-page="users"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5M16 4.5a3.5 3.5 0 010 7M21.5 20c-.5-2.6-1.9-4.3-3.9-5.1"/></svg><span>Users</span></button>
     </nav>
     <div class="side-foot" id="sideFoot"></div>
@@ -212,6 +219,26 @@
         <div id="ssWarn"></div>
       </div>
       <div id="ssAccounts"></div>
+    </section>
+
+    <section id="p-alerts" data-p hidden>
+      <div class="panel">
+        <div class="panel-head"><div><h2>Alerts on this device</h2><p>A notification on your phone or computer when something sells, a buyer asks a question, a return or case opens, or a seller standards warning appears. Turn it on separately on each phone or computer.</p></div></div>
+        <div style="padding:0 16px 16px" id="alDevice"></div>
+      </div>
+      <div class="panel" style="margin-top:14px">
+        <div class="panel-head"><div><h2>Instant from eBay</h2><p>Without this, the app looks for new sales every 2 minutes, questions every 10 minutes and returns every 3 hours. With it, eBay tells the app the moment something sells, a question comes in or a return opens, and the alert (and stock sync) follows within seconds.</p></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" type="button" id="alEbayOn">Turn on for all accounts</button><button class="btn" type="button" id="alEbayOff">Turn off</button></div></div>
+        <div class="tbl-wrap"><table id="alAcc"></table></div>
+      </div>
+      <div class="panel" style="margin-top:14px">
+        <div class="panel-head"><div><h2>Devices getting alerts</h2><p>Each phone or computer chooses what it gets.</p></div></div>
+        <div class="tbl-wrap"><table id="alSubs"></table></div>
+      </div>
+      <div class="panel" style="margin-top:14px">
+        <div class="panel-head"><div><h2>Recent alerts</h2><p>The last 100, newest first.</p></div></div>
+        <div class="tbl-wrap"><table id="alLog"></table></div>
+      </div>
     </section>
 
     <section id="p-offers" data-p hidden>

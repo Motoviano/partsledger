@@ -28,6 +28,7 @@ from . import promos as PM
 from . import compete as CP
 from . import fitment as FT
 from . import standards as SS
+from . import alerts as AL
 from .auth import check_pw, ensure_admin, hash_pw
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -56,6 +57,7 @@ def startup():
         con.executescript(CP.SCHEMA)
         con.executescript(FT.SCHEMA)
         con.executescript(SS.SCHEMA)
+        con.executescript(AL.SCHEMA)
         con.execute("UPDATE title_jobs SET status='stopped' WHERE status IN ('queued','running')")
         AP.migrate(con)
         con.execute("UPDATE ad_changes SET status='failed', message='Stopped by a restart; try again' WHERE status='waiting'")
@@ -75,6 +77,7 @@ def startup():
         PM.start_scheduler(DB.db)
         CP.start_scheduler(DB.db)
         SS.start_scheduler(DB.db)
+        AL.start_scheduler(DB.db)
 
 
 def uk_today():
@@ -982,6 +985,117 @@ def standards_check(request: Request):
     need_user(request)
     SS.check(DB.db)
     return {"ok": True}
+
+
+# ------------------------------------------------------------------ alerts
+@app.get("/api/alerts")
+def alerts(request: Request):
+    u = need_user(request)
+    with DB.db() as con:
+        _, pub = AL.vapid(con)
+        subs = [{**{k: r[k] for k in ("id", "endpoint", "user_email", "device", "created_at", "last_ok", "fails", "last_error")}, "prefs": AL.prefs_of(r)}
+                for r in con.execute("SELECT * FROM push_subs ORDER BY id")]
+        state = [dict(r) for r in con.execute("""SELECT a.id, a.name, s.notify_status, s.notify_message, s.notify_at, s.last_poke, s.pokes
+            FROM accounts a JOIN ebay_tokens t ON t.account_id=a.id LEFT JOIN alert_state s ON s.account_id=a.id ORDER BY a.sort, a.id""")]
+        log = [dict(r) for r in con.execute("SELECT l.id,l.at,l.account_id,l.kind,l.title,l.body,l.url,l.sent,l.source FROM alert_log l WHERE source!='start' ORDER BY l.id DESC LIMIT 100")]
+    return {"key": pub, "subs": subs, "accounts": state, "log": log, "kinds": AL.KINDS, "notifyUrl": AL.notify_url(), "me": u["email"]}
+
+
+@app.post("/api/alerts/subscribe")
+async def alerts_subscribe(request: Request):
+    u = need_user(request)
+    b = await request.json()
+    sub = b.get("subscription") or {}
+    keys = sub.get("keys") or {}
+    ep = str(sub.get("endpoint") or "")
+    if not ep.startswith("https://") or not keys.get("p256dh") or not keys.get("auth"):
+        raise HTTPException(400, "This browser didn't give a usable push address.")
+    with DB.db() as con:
+        con.execute("""INSERT INTO push_subs(endpoint,p256dh,auth,user_email,device,prefs) VALUES(?,?,?,?,?,?)
+                       ON CONFLICT(endpoint) DO UPDATE SET p256dh=excluded.p256dh, auth=excluded.auth, user_email=excluded.user_email, device=excluded.device""",
+                    (ep, keys["p256dh"], keys["auth"], u["email"], str(b.get("device") or "")[:80], json.dumps(AL.PREF_DEFAULT)))
+        r = con.execute("SELECT * FROM push_subs WHERE endpoint=?", (ep,)).fetchone()
+        ok = AL.send_push(con, dict(r), {"title": "Partsledger alerts are on", "body": "You'll get sales, buyer questions and returns here.", "url": "/#alerts", "tag": "welcome"})
+    return {"ok": True, "delivered": ok}
+
+
+@app.post("/api/alerts/prefs")
+async def alerts_prefs(request: Request):
+    need_user(request)
+    b = await request.json()
+    p = {k: bool(b["prefs"].get(k)) for k in AL.KINDS if k in (b.get("prefs") or {})}
+    if "min_sale" in (b.get("prefs") or {}):
+        p["min_sale"] = max(0.0, float(b["prefs"]["min_sale"] or 0))
+    with DB.db() as con:
+        r = con.execute("SELECT * FROM push_subs WHERE id=?", (int(b["id"]),)).fetchone()
+        if not r:
+            raise HTTPException(404, "This device isn't set up for alerts any more.")
+        con.execute("UPDATE push_subs SET prefs=? WHERE id=?", (json.dumps({**AL.prefs_of(r), **p}), r["id"]))
+    return {"ok": True}
+
+
+@app.post("/api/alerts/remove")
+async def alerts_remove(request: Request):
+    need_user(request)
+    b = await request.json()
+    with DB.db() as con:
+        con.execute("DELETE FROM push_subs WHERE id=? OR endpoint=?", (int(b.get("id") or 0), str(b.get("endpoint") or "")))
+    return {"ok": True}
+
+
+@app.post("/api/alerts/test")
+async def alerts_test(request: Request):
+    need_user(request)
+    b = await request.json()
+    with DB.db() as con:
+        r = con.execute("SELECT * FROM push_subs WHERE id=?", (int(b["id"]),)).fetchone()
+        if not r:
+            raise HTTPException(404, "This device isn't set up for alerts any more.")
+        ok = AL.send_push(con, dict(r), {"title": "Test alert", "body": "Sold £24.99 on eBay · this is how a sale will look", "url": "/#alerts", "tag": "test"})
+        err = con.execute("SELECT last_error FROM push_subs WHERE id=?", (r["id"],)).fetchone()
+    if not ok:
+        raise HTTPException(400, "The push service refused the alert: " + ((err and err[0]) or "the device has unsubscribed; turn alerts on again"))
+    return {"ok": True}
+
+
+@app.post("/api/alerts/ebay")
+async def alerts_ebay(request: Request):
+    need_user(request)
+    b = await request.json()
+    with DB.db() as con:
+        for a in [int(x) for x in b.get("accounts") or []]:
+            AL.subscribe(con, a, bool(b.get("enable", True)))
+    return {"ok": True}
+
+
+@app.post("/ebay/notify")
+async def ebay_notify(request: Request):
+    """eBay Platform Notifications. Answer at once; the work happens in the background."""
+    raw = await request.body()
+    if len(raw) < 2_000_000:
+        import threading
+        threading.Thread(target=lambda: DB.log("info", "alerts", "eBay notification: " + str(AL.handle_notification(DB.db, raw))), daemon=True).start()
+    return JSONResponse({}, status_code=200)
+
+
+@app.get("/sw.js")
+def service_worker():
+    return FileResponse(STATIC / "sw.js", media_type="application/javascript", headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
+
+
+@app.get("/manifest.webmanifest")
+def manifest():
+    return JSONResponse({"name": "Partsledger", "short_name": "Partsledger", "start_url": "/", "display": "standalone", "background_color": "#1f2523",
+                         "theme_color": "#1f2523", "icons": [{"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
+                                                              {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}]},
+                        media_type="application/manifest+json")
+
+
+@app.get("/icon-{size}.png")
+def icon(size: int):
+    if size not in (192, 512, 180):
+        raise HTTPException(404)
+    return FileResponse(STATIC / f"icon-{size}.png", media_type="image/png", headers={"Cache-Control": "max-age=86400"})
 
 
 # ------------------------------------------------------------------ offers to interested buyers
