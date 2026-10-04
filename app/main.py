@@ -25,6 +25,7 @@ from . import payouts as PO
 from . import titles as TL
 from . import offers as OF
 from . import promos as PM
+from . import compete as CP
 from .auth import check_pw, ensure_admin, hash_pw
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -50,6 +51,7 @@ def startup():
         con.executescript(TL.SCHEMA)
         con.executescript(OF.SCHEMA)
         con.executescript(PM.SCHEMA)
+        con.executescript(CP.SCHEMA)
         con.execute("UPDATE title_jobs SET status='stopped' WHERE status IN ('queued','running')")
         AP.migrate(con)
         con.execute("UPDATE ad_changes SET status='failed', message='Stopped by a restart; try again' WHERE status='waiting'")
@@ -67,6 +69,7 @@ def startup():
         PO.start_scheduler(DB.db)
         OF.start_scheduler(DB.db)
         PM.start_scheduler(DB.db)
+        CP.start_scheduler(DB.db)
 
 
 def uk_today():
@@ -812,6 +815,92 @@ async def promos_act(request: Request):
         raise HTTPException(400, "Unknown action.")
     PM.act(DB.db, int(b["account_id"]), str(b["promotion_id"]), b["action"], u["email"])
     return {"ok": True}
+
+
+# ------------------------------------------------------------------ competitor prices
+@app.get("/api/compete")
+def compete(request: Request):
+    need_user(request)
+    with DB.db() as con:
+        s = CP.get_settings(con)
+        return {"rows": CP.summarise(con, s), "settings": s, "progress": CP.PROGRESS, "calls": CP.calls_today(con), "cap": CP.DAILY_CAP}
+
+
+@app.post("/api/compete/check")
+async def compete_check(request: Request):
+    u = need_user(request)
+    b = await request.json()
+    targets = [(int(x["account_id"]), str(x["item_id"])) for x in b.get("items") or []]
+    if not targets:
+        raise HTTPException(400, "Choose the listings to check.")
+    with DB.db() as con:
+        left = CP.DAILY_CAP - CP.calls_today(con)
+    if left <= 0:
+        raise HTTPException(400, f"eBay allows {CP.DAILY_CAP:,} searches a day and they're used up; try again tomorrow.")
+    if not CP.start_check(DB.db, targets[:left], u["email"]):
+        raise HTTPException(400, "A check is already running; wait for it to finish.")
+    return {"queued": min(len(targets), left), "capped": len(targets) > left}
+
+
+@app.post("/api/compete/query")
+async def compete_query(request: Request):
+    u = need_user(request)
+    b = await request.json()
+    a, item, q = int(b["account_id"]), str(b["item_id"]), str(b.get("query") or "").strip()[:100]
+    with DB.db() as con:
+        if not q:  # back to automatic
+            con.execute("DELETE FROM comp_query WHERE account_id=? AND item_id=?", (a, item))
+        elif con.execute("SELECT 1 FROM comp_query WHERE account_id=? AND item_id=?", (a, item)).fetchone():
+            con.execute("UPDATE comp_query SET query=?, kind='custom' WHERE account_id=? AND item_id=?", (q, a, item))
+        else:
+            con.execute("INSERT INTO comp_query(account_id,item_id,query,kind,updated_at) VALUES(?,?,?,?,?)", (a, item, q, "custom", CP.now_iso()))
+    if not CP.start_check(DB.db, [(a, item)], u["email"]):
+        raise HTTPException(400, "A check is already running; the new search words are saved and used next time.")
+    return {"ok": True}
+
+
+@app.post("/api/compete/ignore")
+async def compete_ignore(request: Request):
+    u = need_user(request)
+    b = await request.json()
+    with DB.db() as con:
+        if b.get("undo"):
+            con.execute("DELETE FROM comp_ignore WHERE account_id=? AND item_id=?", (int(b["account_id"]), str(b["item_id"])))
+        else:
+            con.execute("INSERT OR IGNORE INTO comp_ignore(account_id,item_id,other_id,by) VALUES(?,?,?,?)",
+                        (int(b["account_id"]), str(b["item_id"]), str(b["other_id"]), u["email"]))
+    return {"ok": True}
+
+
+@app.post("/api/compete/settings")
+async def compete_settings(request: Request):
+    need_user(request)
+    b = await request.json()
+    with DB.db() as con:
+        return CP.set_settings(con, b)
+
+
+@app.post("/api/compete/apply")
+async def compete_apply(request: Request):
+    """Change prices to the suggested ones, through Bulk edit (so they can be undone there)."""
+    u = need_user(request)
+    b = await request.json()
+    want = {(int(x["account_id"]), str(x["item_id"])) for x in b.get("items") or []}
+    if not want:
+        raise HTTPException(400, "Tick the listings to change.")
+    with DB.db() as con:
+        rows = [r for r in CP.summarise(con) if (r["account_id"], r["item_id"]) in want and r.get("suggest")]
+        changes = [{"account_id": r["account_id"], "item_id": r["item_id"], "sku": r["sku"], "title": r["title"], "field": "price",
+                    "old": r["price"], "new": r["suggest"]} for r in rows
+                   if r.get("floor") is not None and r["suggest"] >= r["floor"] - 0.005 and 0.99 <= r["suggest"] <= 99999
+                   and abs(r["suggest"] - (r["price"] or 0)) >= 0.01]
+        if not changes:
+            raise HTTPException(400, "None of the ticked listings has a safe price change.")
+        for a in {c["account_id"] for c in changes}:
+            EB.access_token(con, a)
+        jid = ED.create_job(con, u["email"], "price", f"Competitor prices: {len(changes)} listings", changes)
+    ED.start(DB.db, jid)
+    return {"job": jid, "changed": len(changes)}
 
 
 # ------------------------------------------------------------------ offers to interested buyers

@@ -1586,8 +1586,105 @@ $('adFile').onchange = async e => {
   e.target.value = '';
 };
 
+// ---------------------------------------------------------------- competitor prices
+let CPD = null, cpOff = new Set(), cpPick = new Set(), cpOpen = null, cpPoll = null;
+const cpState = { sort: null, limit: 500, render: () => drawCompete(), empty: 'No listings for this selection.' };
+const CPS = { match: ['Can match', 'b'], lower: ['Can get closer', 'ret'], cant: ['Below safe price', 'm'], raise: ['Can go up', 'k'], cheapest: ['Cheapest', 'k'], alone: ['No other sellers', 'k'], nocost: ['No cost', 'm'] };
+async function renderCompete() {
+  try { CPD = await api('/api/compete'); } catch (e) { toast(e.message); return; }
+  const s = CPD.settings, pr = CPD.progress;
+  $('cpAuto').textContent = s.comp_auto ? 'Daily check: ON (click to turn off)' : 'Daily check: OFF (click to turn on)';
+  $('cpAuto').classList.toggle('primary', !s.comp_auto);
+  [['cpCut', 'comp_undercut'], ['cpMinP', 'comp_min_profit'], ['cpRaise', 'comp_raise_pct'], ['cpDaily', 'comp_daily']].forEach(([id, k]) => { if (document.activeElement !== $(id)) $(id).value = s[k]; });
+  $('cpStatus').innerHTML = (pr.running ? `<b>Checking ${n0(pr.done)} of ${n0(pr.total)} listings…</b> ` : '') +
+    (s.comp_auto ? `Every day after 3am the app checks ${n0(s.comp_daily)} listings (not checked yet first, then the oldest checks). ` : 'Listings are only checked when you click Check. ') +
+    `eBay searches used today: ${n0(CPD.calls)} of ${n0(CPD.cap)}. Nothing changes on eBay until you click Change prices.`;
+  drawCompete();
+  clearTimeout(cpPoll); if (pr.running && page === 'compete') cpPoll = setTimeout(renderCompete, 4000);
+}
+function cmRows() {
+  const f = F(), q = $('cpSearch').value.trim().toLowerCase(), v = $('cpView').value;
+  return (CPD ? CPD.rows : []).map(r => ({ ...r, a: AIDX[r.account_id], k: r.account_id + '|' + r.item_id })).filter(r => r.a !== undefined && f.a.has(r.a)
+    && (!q || (r.sku || '').toLowerCase().includes(q) || (r.title || '').toLowerCase().includes(q))
+    && (v === 'all' || (v === 'unchecked' ? !r.checked : r.state === v)));
+}
+function drawCompete() {
+  if (!CPD) return;
+  const rows = cmRows(), all = CPD.rows.filter(r => AIDX[r.account_id] !== undefined && F().a.has(AIDX[r.account_id]));
+  const cnt = k => all.filter(r => r.state === k).length;
+  $('cpStats').innerHTML = [['Checked', n0(all.filter(r => r.checked).length) + ' of ' + n0(all.length)], ['You\'re cheapest', n0(cnt('cheapest') + cnt('raise') + cnt('alone'))],
+    ['Can match safely', n0(cnt('match'))], ['Cheaper sellers below your safe price', n0(cnt('cant') + cnt('lower'))], ['Could go up', n0(cnt('raise'))]]
+    .map(([l, v]) => `<div class="stat"><small>${l}</small><b>${v}</b></div>`).join('');
+  $('cpSub').textContent = `${n0(rows.length)} listings` + (rows.length > cpState.limit ? ` (first ${n0(cpState.limit)} shown)` : '') + '. Click the number of sellers to see them, mark ones that aren\'t the same part, or change the search words.';
+  table($('cpTable'), [
+    { h: '', l: 1, v: r => r.suggest != null ? 0 : 1, f: r => r.suggest != null ? `<input type="checkbox" class="cp-sel" data-k="${esc(r.k)}" ${cpTicked(r) ? 'checked' : ''} aria-label="Change the price of ${esc(r.sku || r.item_id)}">` : '' },
+    { h: 'Listing', l: 1, cl: 'prod', v: r => r.title || '', f: r => `<span class="t">${esc(r.title || r.item_id)}</span><span class="s"><span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)} · ${esc(r.sku || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(r.item_id)}" target="_blank" rel="noopener">${esc(r.item_id)}</a> · stock ${r.qty ?? '–'}</span>` },
+    { h: 'You', v: r => r.ours ?? r.price ?? 0, f: r => `<b>${gbp(r.ours ?? r.price)}</b>` + (r.post ? `<span class="sub">${gbp(r.price)} + ${gbp(r.post)} post</span>` : r.checked ? '<span class="sub">free post</span>' : '') },
+    { h: 'Cheapest other', v: r => r.cheapest ?? 1e9, f: r => r.cheapest != null ? `<a href="${esc(r.cheapest_url || '#')}" target="_blank" rel="noopener">${gbp(r.cheapest)}</a><span class="sub">${esc(r.cheapest_seller || '')}</span>` : '–' },
+    { h: 'Middle price', v: r => r.median ?? 1e9, f: r => r.median != null ? gbp(r.median) : '–' },
+    { h: 'Sellers', v: r => r.n ?? -1, f: r => r.checked ? (r.status === 'error' ? `<a href="#" class="cp-open" data-k="${esc(r.k)}"><span class="neg">error</span></a>` : `<a href="#" class="cp-open" data-k="${esc(r.k)}">${n0(r.n)}${r.rank ? ` <span class="muted">· you're ${ord(r.rank)}</span>` : ''}</a>` + (r.kind === 'title' ? '<span class="sub">by title: check</span>' : r.kind === 'custom' ? '<span class="sub">your search words</span>' : '')) : '<span class="muted">not checked</span>' },
+    { h: 'Lowest safe price', v: r => r.floor ?? -1, f: r => r.floor != null ? gbp(r.floor) : '–' },
+    { h: 'Suggested', v: r => r.suggest != null ? r.suggest - r.price : -1e9, f: r => r.suggest != null ? `<b>${gbp(r.suggest)}</b><span class="sub ${r.suggest > r.price ? 'pos' : ''}">${r.suggest > r.price ? '+' : ''}${gbp(r.suggest - r.price)}</span>` : '–' },
+    { h: 'Notes', l: 1, cl: 'prod', v: r => r.state || '', f: r => (r.state && CPS[r.state] ? `<span class="chip ${CPS[r.state][1]}">${CPS[r.state][0]}</span> ` : '') + `<span class="muted">${esc(r.why || (r.status === 'error' ? r.message : '') || '')}</span>` + (r.checked ? `<span class="sub">checked ${ago(r.checked)}</span>` : '') }],
+    cpState.sort ? rows : rows.sort((x, y) => (x.suggest == null) - (y.suggest == null) || !x.checked - !y.checked || (y.sold || 0) - (x.sold || 0)), null, cpState);
+  const t = $('cpTable');
+  t.querySelectorAll('.cp-sel').forEach(b => b.onchange = () => { if (b.checked) { cpOff.delete(b.dataset.k); cpPick.add(b.dataset.k); } else { cpPick.delete(b.dataset.k); cpOff.add(b.dataset.k); } cpCount(); });
+  t.querySelectorAll('.cp-open').forEach(a => a.onclick = e => { e.preventDefault(); cpOpen = cpOpen === a.dataset.k ? null : a.dataset.k; drawCompete(); });
+  if (cpOpen) {
+    const ri = (cpState.rows || []).findIndex(r => r.k === cpOpen), tr = t.querySelector(`tbody tr[data-ri="${ri}"]`);
+    if (ri >= 0 && tr) tr.insertAdjacentHTML('afterend', `<tr class="cp-detail"><td colspan="9" class="l">${cpDetail(cpState.rows[ri])}</td></tr>`), cpWireDetail(cpState.rows[ri]);
+  }
+  cpCount();
+}
+const ord = n => n + (n % 10 === 1 && n % 100 !== 11 ? 'st' : n % 10 === 2 && n % 100 !== 12 ? 'nd' : n % 10 === 3 && n % 100 !== 13 ? 'rd' : 'th');
+function cpDetail(r) {
+  const its = r.items || [];
+  return `<div style="padding:8px 4px">
+    <div class="form-row" style="padding:0 0 10px"><div class="f" style="flex:1;min-width:240px"><label for="cpQ">Search words${r.kind === 'part' ? ' (from the part number)' : r.kind === 'title' ? ' (from the title)' : ''}</label><input type="text" id="cpQ" value="${esc(r.query || '')}" maxlength="100" style="width:100%"></div>
+      <button class="btn" type="button" id="cpQSave">Search again</button>${r.kind === 'custom' ? '<button class="btn" type="button" id="cpQAuto">Back to automatic</button>' : ''}${r.ignored ? `<button class="btn" type="button" id="cpUnign">Show the ${r.ignored} hidden again</button>` : ''}</div>
+    ${r.status === 'error' ? `<p class="neg">${esc(r.message || '')}</p>` : its.length ? `<table class="mini" style="width:100%"><thead><tr><th class="l">Seller</th><th class="l">Their listing</th><th>Price</th><th>Postage</th><th>Total</th><th></th></tr></thead><tbody>${its.map(x => `<tr>
+      <td class="l">${esc(x.seller || '')}<span class="sub">${x.fb != null ? n0(x.fb) + ' feedback' : ''}</span></td>
+      <td class="l prod"><a href="${esc(x.url || '#')}" target="_blank" rel="noopener">${esc(x.title || x.id)}</a>${x.exact ? ' <span class="chip k">part number in title</span>' : ''}</td>
+      <td>${gbp(x.price)}</td><td>${x.ship == null ? '<span class="muted">?</span>' : x.ship ? gbp(x.ship) : 'Free'}</td><td><b>${gbp(x.total)}</b></td>
+      <td><button class="link cp-ign" type="button" data-o="${esc(x.id)}">Not the same part</button></td></tr>`).join('')}</tbody></table>
+      ${r.n_exact ? `<p class="muted" style="margin:8px 0 0">Prices above use only the ${r.n_exact} listings with your part number in their title.</p>` : ''}` : '<p class="muted">No other sellers found with these search words.</p>'}</div>`;
+}
+function cpWireDetail(r) {
+  const one = { account_id: r.account_id, item_id: r.item_id };
+  $('cpQSave').onclick = async () => { try { await post('/api/compete/query', { ...one, query: $('cpQ').value }); toast('Searching…'); setTimeout(renderCompete, 2500); } catch (e) { toast(e.message); } };
+  if ($('cpQAuto')) $('cpQAuto').onclick = async () => { try { await post('/api/compete/query', { ...one, query: '' }); toast('Searching…'); setTimeout(renderCompete, 4000); } catch (e) { toast(e.message); } };
+  if ($('cpUnign')) $('cpUnign').onclick = async () => { try { await post('/api/compete/ignore', { ...one, undo: true }); renderCompete(); } catch (e) { toast(e.message); } };
+  document.querySelectorAll('.cp-ign').forEach(b => b.onclick = async () => { try { await post('/api/compete/ignore', { ...one, other_id: b.dataset.o }); renderCompete(); } catch (e) { toast(e.message); } });
+}
+// matches found by title alone aren't ticked until you've looked at them
+const cpTicked = r => cpPick.has(r.k) || (!cpOff.has(r.k) && r.kind !== 'title');
+function cpChosen() { return cmRows().filter(r => r.suggest != null && cpTicked(r)); }
+function cpCount() {
+  const n = cpChosen().length, m = Math.min(cmRows().length, 4500);
+  $('cpSel').textContent = n ? `${n0(n)} price changes ticked` : '';
+  $('cpApply').disabled = !n; $('cpApply').textContent = n ? `Change ${n0(n)} price${n === 1 ? '' : 's'}` : 'Change prices';
+  $('cpCheck').textContent = `Check ${n0(m)} listings`; $('cpCheck').disabled = !m || (CPD && CPD.progress.running);
+}
+['cpView', 'cpSearch'].forEach(id => $(id).addEventListener('input', () => { cpOpen = null; drawCompete(); }));
+$('cpCheck').onclick = async () => {
+  const b = $('cpCheck'), rs = cmRows(); if (!rs.length) return;
+  if (rs.length > 50 && b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = `Click again: ${n0(rs.length)} eBay searches`; setTimeout(() => { b.dataset.sure = ''; cpCount(); }, 6000); return; }
+  b.dataset.sure = '';
+  try { const r = await post('/api/compete/check', { items: rs.map(x => ({ account_id: x.account_id, item_id: x.item_id })) }); toast(`Checking ${n0(r.queued)} listings…` + (r.capped ? ' (the rest go over today\'s eBay limit)' : '')); setTimeout(renderCompete, 1500); } catch (e) { toast(e.message); }
+};
+$('cpApply').onclick = async () => {
+  const b = $('cpApply'), ch = cpChosen(); if (!ch.length) return;
+  if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = `Click again to change ${n0(ch.length)} prices on eBay`; setTimeout(() => { b.dataset.sure = ''; cpCount(); }, 6000); return; }
+  b.dataset.sure = '';
+  try { const r = await post('/api/compete/apply', { items: ch.map(x => ({ account_id: x.account_id, item_id: x.item_id })) }); toast(`Changing ${n0(r.changed)} prices. You can follow it and undo it on Bulk edit → Recent edits.`); cpOff = new Set(); cpPick = new Set(); setTimeout(renderCompete, 5000); } catch (e) { toast(e.message); }
+};
+$('cpSave').onclick = async () => {
+  try { await post('/api/compete/settings', { comp_undercut: +$('cpCut').value, comp_min_profit: +$('cpMinP').value, comp_raise_pct: +$('cpRaise').value, comp_daily: +$('cpDaily').value }); toast('Saved'); renderCompete(); } catch (e) { toast(e.message); }
+};
+$('cpAuto').onclick = async () => { try { await post('/api/compete/settings', { comp_auto: !CPD.settings.comp_auto }); renderCompete(); } catch (e) { toast(e.message); } };
+
 // ---------------------------------------------------------------- wiring
-const titles = { dash: 'Dashboard', orders: 'Sold items', traffic: 'Traffic', edit: 'Bulk edit', stock: 'Stock sync', msgs: 'Messages', ads: 'Ads', returns: 'Returns', payouts: 'Payouts', offers: 'Offers', promos: 'Discounts', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
+const titles = { dash: 'Dashboard', orders: 'Sold items', traffic: 'Traffic', edit: 'Bulk edit', stock: 'Stock sync', msgs: 'Messages', ads: 'Ads', returns: 'Returns', payouts: 'Payouts', offers: 'Offers', promos: 'Discounts', compete: 'Competitors', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
 let page = 'dash';
 function show(p) {
   page = p; document.querySelectorAll('[data-p]').forEach(s => s.hidden = s.id !== 'p-' + p);
@@ -1611,6 +1708,7 @@ function renderAll() {
   if (page === 'payouts') renderPayouts();
   if (page === 'offers') renderOffers();
   if (page === 'promos') renderPromos();
+  if (page === 'compete') renderCompete();
   if (page === 'cogs') { renderBands(); renderCogs(); }
   if (page === 'charts') renderCharts();
   if (page === 'uploads') renderUploads();
