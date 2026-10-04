@@ -29,6 +29,7 @@ from . import compete as CP
 from . import fitment as FT
 from . import standards as SS
 from . import alerts as AL
+from . import ratelimits as RL
 from .auth import check_pw, ensure_admin, hash_pw
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -1120,6 +1121,12 @@ def icon(size: int):
     if size not in (192, 512, 180):
         raise HTTPException(404)
     return FileResponse(STATIC / f"icon-{size}.png", media_type="image/png", headers={"Cache-Control": "max-age=86400"})
+
+
+@app.get("/api/ebay/limits")
+def ebay_limits(request: Request, refresh: int = 0):
+    need_user(request)
+    return RL.read(force=bool(refresh))
 
 
 # ------------------------------------------------------------------ offers to interested buyers

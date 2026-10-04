@@ -1942,6 +1942,34 @@ $('alEbayOff').onclick = () => alEbay(false);
 if (alSupported()) navigator.serviceWorker.getRegistration('/').then(r => r && r.update()).catch(() => { });
 window.addEventListener('hashchange', () => { const h = location.hash.slice(1); if (titles[h] && h !== page) show(h); });
 
+// ---------------------------------------------------------------- eBay call usage
+let RLD = null;
+async function renderLimits(force) {
+  try { RLD = await api('/api/ebay/limits' + (force ? '?refresh=1' : '')); } catch (e) { $('rlBody').innerHTML = `<p class="neg" style="padding:0 16px 14px">${esc(e.message)}</p>`; return; }
+  drawLimits();
+}
+function drawLimits() {
+  if (!RLD) return;
+  const onlyUsed = $('rlUsed').checked;
+  const win = s => !s ? '' : s >= 86400 ? (s === 86400 ? 'a day' : `${Math.round(s / 86400)} days`) : s >= 3600 ? `${Math.round(s / 3600)} h` : `${Math.round(s / 60)} min`;
+  const tbl = (rows, empty) => {
+    rows = rows.filter(r => r.limit != null && (!onlyUsed || r.used > 0)).sort((x, y) => (y.used / (y.limit || 1)) - (x.used / (x.limit || 1)));
+    if (!rows.length) return `<p class="muted" style="padding:0 16px 10px">${empty}</p>`;
+    return `<div class="tbl-wrap"><table><thead><tr><th class="l">API</th><th class="l">Calls</th><th>Used</th><th>Limit</th><th>Left</th><th class="l">Share used</th><th class="l">Resets</th></tr></thead><tbody>${rows.map(r => {
+      const p = r.limit ? r.used / r.limit : 0, c = p >= 0.9 ? 'var(--bad)' : p >= 0.7 ? 'var(--warn)' : 'var(--good)';
+      return `<tr><td class="l">${esc(r.api || '')}<span class="sub">${esc([r.context, r.version].filter(Boolean).join(' · '))}</span></td><td class="l">${esc(r.resource || '')}</td>
+        <td>${n0(r.used)}</td><td>${n0(r.limit)}<span class="sub">per ${win(r.window)}</span></td><td><b>${n0(r.left)}</b></td>
+        <td class="l"><div style="width:120px;height:8px;border-radius:4px;background:var(--line)"><div style="width:${Math.min(100, p * 100).toFixed(1)}%;height:8px;border-radius:4px;background:${c}"></div></div><span class="sub">${(p * 100).toFixed(1)}%</span></td>
+        <td class="l muted">${r.reset ? esc(new Date(r.reset).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })) : ''}</td></tr>`; }).join('')}</tbody></table></div>`;
+  };
+  const none = onlyUsed ? 'Nothing used today yet.' : 'eBay sent no limits.';
+  $('rlBody').innerHTML = `<h3 style="margin:4px 16px 6px;font-size:15px">App: shared by all accounts</h3>${RLD.app_error ? `<p class="neg" style="padding:0 16px">${esc(RLD.app_error)}</p>` : tbl(RLD.app, none)}
+    ${RLD.accounts.map(a => `<h3 style="margin:14px 16px 6px;font-size:15px">${esc(a.name)}: this account only</h3>${a.error ? `<p class="neg" style="padding:0 16px">${esc(a.error)}</p>` : tbl(a.rows, onlyUsed ? 'No per-account limits used today.' : 'No per-account limits.')}`).join('')}
+    <p class="muted" style="padding:6px 16px 14px;margin:0">Read from eBay ${ago(RLD.at.slice(0, 19))}. eBay updates these numbers with a short delay.</p>`;
+}
+$('rlRefresh').onclick = () => renderLimits(true);
+$('rlUsed').onchange = drawLimits;
+
 // ---------------------------------------------------------------- wiring
 const titles = { dash: 'Dashboard', orders: 'Sold items', traffic: 'Traffic', edit: 'Bulk edit', stock: 'Stock sync', msgs: 'Messages', ads: 'Ads', returns: 'Returns', payouts: 'Payouts', offers: 'Offers', promos: 'Discounts', compete: 'Competitors', fitment: 'Fitment', standards: 'Seller standards', alerts: 'Alerts', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
 let page = 'dash';
@@ -1975,7 +2003,7 @@ function renderAll() {
   if (page === 'charts') renderCharts();
   if (page === 'uploads') renderUploads();
   if (page === 'users') { renderUsers(); renderLog(); }
-  if (page === 'ebay') renderEbay();
+  if (page === 'ebay') { renderEbay(); renderLimits(); }
 }
 ['fPeriod', 'fFrom', 'fTo'].forEach(id => $(id).addEventListener('change', () => { ordState.limit = 100; activeTile = null; renderAll(); }));
 $('tileSet').onchange = e => { tileSet = e.target.value; try { localStorage.setItem('pl_tiles', tileSet); } catch (err) { } activeTile = null; renderTiles(); };

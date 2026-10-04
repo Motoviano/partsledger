@@ -528,6 +528,11 @@
         <div class="tbl-wrap"><table id="adSum"></table></div>
         <div class="tbl-wrap"><table id="adRows"></table></div>
       </div>
+      <div class="panel" style="margin-top:14px">
+        <div class="panel-head"><div><h2>eBay call usage today</h2><p id="rlSub">eBay limits how many calls the app can make each day. "App" limits are shared by all connected accounts (one set of developer keys); some APIs also have a limit per account.</p></div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><label class="chk"><input type="checkbox" id="rlUsed" checked> Only APIs used today</label><button class="btn" type="button" id="rlRefresh">Refresh</button></div></div>
+        <div id="rlBody"><p class="muted" style="padding:0 16px 14px">Loading…</p></div>
+      </div>
     </section>
 
     <section id="p-users" data-p hidden>
