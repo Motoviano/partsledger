@@ -191,7 +191,7 @@
 
     <section id="p-edit" data-p hidden>
       <div class="panel">
-        <div class="panel-head"><div><h2>1. Choose listings</h2><p>Active listings on connected accounts. The account and product group filters above apply too. Tick the listings to change, or type a new price, stock or title straight into a row.</p></div></div>
+        <div class="panel-head"><div><h2>1. Choose listings</h2><p>Narrow the list with these filters (the account and product group filters at the top apply too). Every listing that matches is ticked; untick any you want to leave out in the list below.</p></div></div>
         <div class="form-row">
           <div class="f"><label for="edPrefix">SKU starts with</label><input type="text" id="edPrefix" style="width:120px" placeholder="e.g. GRLL"></div>
           <div class="f"><label for="edSearch">Title or SKU contains</label><input type="text" id="edSearch" style="width:200px" placeholder="e.g. Transit"></div>
@@ -202,13 +202,11 @@
           <span class="muted" id="edCount"></span>
           <button class="btn" type="button" id="edNone">Untick all</button>
           <button class="btn" type="button" id="edAllOn">Tick all</button>
-          <button class="btn primary" type="button" id="edTypedBtn" disabled>Review typed changes</button>
+          <button class="btn" type="button" id="edTypedBtn" disabled title="Type a new price, stock or title in a row first">Review typed changes</button>
         </div>
-        <div class="tbl-wrap"><table id="edList"></table></div>
-        <div class="more"><button class="btn" id="edListMore" type="button">Show more</button></div>
       </div>
       <div class="panel" style="margin-top:14px">
-        <div class="panel-head"><div><h2>2. Or change all ticked listings at once</h2><p id="edHelp"></p></div></div>
+        <div class="panel-head"><div><h2>2. Choose what to change on the ticked listings</h2><p id="edHelp"></p></div></div>
         <div class="form-row">
           <div class="f"><label for="edField">Change</label><select id="edField"><option value="price">Price</option><option value="qty">Quantity</option><option value="title">Title</option><option value="fitment">Title from fitment (automatic)</option><option value="specific">Item specific</option><option value="bestoffer">Best Offer rules</option></select></div>
           <div class="ed-opt" data-for="price">
@@ -247,6 +245,11 @@
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><span class="muted" id="edSel"></span><button class="btn" type="button" id="edCsv">Export CSV</button><button class="btn primary" type="button" id="edApply">Apply to eBay</button></div></div>
         <div class="tbl-wrap"><table id="edTable"></table></div>
         <div class="more"><button class="btn" id="edMore" type="button">Show more</button></div>
+      </div>
+      <div class="panel" style="margin-top:14px">
+        <div class="panel-head"><div><h2>Listings</h2><p>Tick or untick listings for step 2. To change just one listing, type a new price, stock or title in its row and click <b>Review typed changes</b>.</p></div></div>
+        <div class="tbl-wrap"><table id="edList"></table></div>
+        <div class="more"><button class="btn" id="edListMore" type="button">Show more</button></div>
       </div>
       <div class="panel" style="margin-top:14px">
         <div class="panel-head"><div><h2>Recent edits</h2><p>Every change keeps the old value. Undo puts back everything a job changed.</p></div></div>

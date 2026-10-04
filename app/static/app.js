@@ -554,7 +554,7 @@ function drawList() {
   const on = rows.filter(r => !edOff.has(edKey(r))).length;
   $('edCount').textContent = EL.connected.length ? `${n0(rows.length)} listings · ${n0(on)} ticked` : 'Connect an eBay account first (eBay page).';
   const typedN = [...edTyped.values()].filter(v => Object.keys(v).length).length;
-  $('edTypedBtn').disabled = !typedN; $('edTypedBtn').textContent = typedN ? `Review typed changes (${typedN})` : 'Review typed changes';
+  $('edTypedBtn').disabled = !typedN; $('edTypedBtn').classList.toggle('primary', !!typedN); $('edTypedBtn').textContent = typedN ? `Review typed changes (${typedN})` : 'Review typed changes';
   const cols = [
     { h: '', l: 1, v: r => edOff.has(edKey(r)) ? 1 : 0, f: r => `<input type="checkbox" class="el-sel" data-k="${esc(edKey(r))}" ${edOff.has(edKey(r)) ? '' : 'checked'} aria-label="Tick ${esc(r.sku || r.id)}">` },
     { h: 'Listing', l: 1, cl: 'prod', v: r => r.t, f: r => { const ty = edTyped.get(edKey(r)) || {};
@@ -588,7 +588,7 @@ function drawList() {
     inp.addEventListener('input', () => {
       const fld = set(); inp.classList.toggle('changed', edTyped.get(inp.dataset.k)?.[fld] != null);
       if (fld === 'title') { const l = inp.nextElementSibling; l.textContent = `${inp.value.length}/80`; l.classList.toggle('over', inp.value.length > 80); }
-      const n = [...edTyped.values()].filter(v => Object.keys(v).length).length; $('edTypedBtn').disabled = !n; $('edTypedBtn').textContent = n ? `Review typed changes (${n})` : 'Review typed changes';
+      const n = [...edTyped.values()].filter(v => Object.keys(v).length).length; $('edTypedBtn').disabled = !n; $('edTypedBtn').classList.toggle('primary', !!n); $('edTypedBtn').textContent = n ? `Review typed changes (${n})` : 'Review typed changes';
     });
     if (inp.dataset.f !== 'title') inp.addEventListener('change', () => { set(); drawList(); });  // refresh the profit column
   });
