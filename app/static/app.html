@@ -321,6 +321,9 @@
           <div class="f"><label for="edSearch">Title or SKU contains</label><input type="text" id="edSearch" style="width:200px" placeholder="e.g. Transit"></div>
           <div class="f"><label for="edStock">Stock</label><select id="edStock"><option value="in">In stock</option><option value="all">All</option><option value="out">Out of stock</option></select></div>
           <div class="f"><label for="edTraffic">Traffic (last 30 days)</label><select id="edTraffic"><option value="">Any</option><option value="attn">Needs attention</option><option value="noimp">No impressions</option><option value="lowctr">Seen, rarely clicked</option><option value="nosale">Views, no sales</option><option value="sell">Selling</option></select></div>
+          <div class="f"><label for="edBoF">Best Offer</label><select id="edBoF"><option value="">Any</option><option value="on">On</option><option value="rules">On, with accept/decline rules</option><option value="off">Off</option><option value="unread">Not read from eBay yet</option></select></div>
+          <div class="f"><span class="lab">&nbsp;</span><button class="btn" type="button" id="edBoScan">Read Best Offer from eBay</button></div>
+          <span class="muted" id="edBoScanNote" style="align-self:flex-end;padding-bottom:9px"></span>
         </div>
         <div class="form-row" style="padding-top:0">
           <span class="muted" id="edCount"></span>
@@ -350,10 +353,11 @@
             <div class="f"><label for="edRepl" id="edReplL">Replace with</label><input type="text" id="edRepl" style="width:180px"></div>
           </div>
           <div class="ed-opt" data-for="bestoffer">
-            <div class="f"><label for="edBoAcc">Auto-accept offers up to % below price</label><input type="number" id="edBoAcc" value="10" step="1" min="1" max="50" style="width:90px"></div>
-            <div class="f"><label for="edBoMinP">Decline offers that leave under £ profit</label><input type="number" id="edBoMinP" value="1" step="0.5" min="0" style="width:90px"></div>
-            <div class="f"><label for="edBoAd">Ad rate % to allow for</label><input type="number" id="edBoAd" value="10" step="0.5" min="0" max="50" style="width:80px"></div>
-            <label class="chk"><input type="checkbox" id="edBoOn" checked> Turn Best Offer on where it's off</label>
+            <div class="f"><label for="edBoHow">How</label><select id="edBoHow"><option value="set">Set accept / decline rules</option><option value="off">Turn Best Offer off</option></select></div>
+            <div class="f bo-set"><label for="edBoAcc">Auto-accept offers up to % below price</label><input type="number" id="edBoAcc" value="10" step="1" min="1" max="50" style="width:90px"></div>
+            <div class="f bo-set"><label for="edBoMinP">Decline offers that leave under £ profit</label><input type="number" id="edBoMinP" value="1" step="0.5" min="0" style="width:90px"></div>
+            <div class="f bo-set"><label for="edBoAd">Ad rate % to allow for</label><input type="number" id="edBoAd" value="10" step="0.5" min="0" max="50" style="width:80px"></div>
+            <label class="chk bo-set"><input type="checkbox" id="edBoOn" checked> Turn Best Offer on where it's off</label>
           </div>
           <div class="ed-opt" data-for="specific">
             <div class="f"><label for="edSpecName">Item specific</label><input type="text" id="edSpecName" list="edSpecList" style="width:210px" placeholder="e.g. Brand"><datalist id="edSpecList">

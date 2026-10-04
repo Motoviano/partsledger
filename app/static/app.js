@@ -527,11 +527,13 @@ const edKey = r => r.aid + '|' + r.id;
 const edLState = { sort: null, limit: 100, render: () => drawList(), empty: 'No listings match these filters.' };
 function edPicked() {
   const f = F(), pre = $('edPrefix').value.trim().toLowerCase(), q = $('edSearch').value.trim().toLowerCase(), st = $('edStock').value, tf = $('edTraffic').value;
-  return EL.rows.map(r => ({ a: AIDX[r[0]], aid: r[0], id: r[1], sku: r[2], g: r[3], t: r[4], price: r[5], qty: r[6], sold: r[7], ad: r[8] }))
+  const bf = $('edBoF').value;
+  return EL.rows.map(r => ({ a: AIDX[r[0]], aid: r[0], id: r[1], sku: r[2], g: r[3], t: r[4], price: r[5], qty: r[6], sold: r[7], ad: r[8], bo: r[9] ? { on: !!r[9][0], accept: r[9][1], decline: r[9][2], at: r[9][3] } : null }))
     .filter(r => r.a !== undefined && f.a.has(r.a) && (f.allG || f.g.has(r.g)) &&
       (!pre || r.sku.toLowerCase().startsWith(pre)) && (!q || r.t.toLowerCase().includes(q) || r.sku.toLowerCase().includes(q) || r.id.includes(q)) &&
       (st === 'all' || (st === 'in' ? r.qty > 0 : r.qty === 0)) &&
-      (!tf || (() => { const fl = edTrInfo && edTrInfo.get(edKey(r))?.flag; return tf === 'attn' ? ['noimp', 'lowctr', 'nosale'].includes(fl) : fl === tf; })()));
+      (!tf || (() => { const fl = edTrInfo && edTrInfo.get(edKey(r))?.flag; return tf === 'attn' ? ['noimp', 'lowctr', 'nosale'].includes(fl) : fl === tf; })()) &&
+      (!bf || (bf === 'unread' ? !r.bo : bf === 'off' ? r.bo && !r.bo.on : bf === 'on' ? r.bo && r.bo.on : r.bo && r.bo.on && (r.bo.accept || r.bo.decline))));
 }
 function edProfitFn() {
   const R = edRates(), cmap = COGSBY(), adIn = (+$('edAd').value || 0) / 100;
@@ -574,8 +576,10 @@ function drawList() {
     { h: 'Cost', v: r => r.pp ? r.pp.c.c : -1, f: r => r.pp ? gbp(r.pp.c.c) + (r.pp.c.src === 'band' ? '<span class="sub">price band</span>' : '') : '<span class="neg">none</span>' },
     { h: 'Profit / sale', v: r => r.pp ? r.pp.p : -1e9, f: r => r.pp ? `<b>${money(r.pp.p)}</b><span class="sub">fees ${(r.pp.fee * 100).toFixed(0)}% · ads ${(r.pp.ad * 100).toFixed(0)}%${r.pp.post ? ' · post £' + r.pp.post.toFixed(2) : ''}</span>` : '–' },
     { h: 'Views 30d', v: r => r.tr ? r.tr.v : -1, f: r => r.tr ? `${n0(r.tr.v)}<span class="sub">${n0(r.tr.imp)} impr.</span>` : '–' },
-    { h: 'Traffic', l: 1, v: r => r.tr?.flag || '', f: r => r.tr && r.tr.flag ? `<span class="chip ${FLAGS[r.tr.flag].chip}">${FLAGS[r.tr.flag].name}</span>` : '' }];
+    { h: 'Traffic', l: 1, v: r => r.tr?.flag || '', f: r => r.tr && r.tr.flag ? `<span class="chip ${FLAGS[r.tr.flag].chip}">${FLAGS[r.tr.flag].name}</span>` : '' },
+    { h: 'Best Offer', l: 1, v: r => r.bo ? (r.bo.on ? 2 : 1) : 0, f: r => !r.bo ? '<span class="muted">not read</span>' : r.bo.on ? `<span class="chip b">On</span>${r.bo.accept ? `<span class="sub">accept from ${gbp(r.bo.accept)}</span>` : ''}${r.bo.decline ? `<span class="sub">decline below ${gbp(r.bo.decline)}</span>` : ''}` : '<span class="muted">Off</span>' }];
   table($('edList'), cols, rows, null, edLState);
+  edBoNote(rows);
   $('edListMore').hidden = rows.length <= edLState.limit;
   const L = $('edList');
   L.querySelectorAll('.el-sel').forEach(b => b.onchange = () => { b.checked ? edOff.delete(b.dataset.k) : edOff.add(b.dataset.k); const n = rows.filter(r => !edOff.has(edKey(r))).length; $('edCount').textContent = `${n0(rows.length)} listings · ${n0(n)} ticked`; });
@@ -601,7 +605,31 @@ function drawList() {
   });
 }
 ['edPrefix', 'edSearch'].forEach(id => $(id).addEventListener('input', () => { $('edPrevPanel').hidden = true; edLState.limit = 100; drawList(); }));
-['edStock', 'edTraffic'].forEach(id => $(id).addEventListener('change', () => { $('edPrevPanel').hidden = true; edLState.limit = 100; drawList(); }));
+['edStock', 'edTraffic', 'edBoF'].forEach(id => $(id).addEventListener('change', () => { $('edPrevPanel').hidden = true; edLState.limit = 100; drawList(); }));
+// Best Offer isn't in the listings sync: it's read from eBay listing by listing, on request
+let edBoPoll = null;
+function edBoNote(rows) {
+  const p = EL && EL.boScan, unread = rows.filter(r => !r.bo).length, on = rows.filter(r => r.bo && r.bo.on).length;
+  $('edBoScan').disabled = !!(p && p.running) || !rows.length;
+  $('edBoScan').textContent = p && p.running ? `Reading ${n0(p.done)} of ${n0(p.total)}…` : `Read Best Offer from eBay (${n0(Math.min(rows.length, 3000))})`;
+  $('edBoScanNote').textContent = rows.some(r => r.bo) ? `${n0(on)} with Best Offer on${unread ? ` · ${n0(unread)} not read yet` : ''}` : '';
+}
+$('edBoScan').onclick = async () => {
+  const rows = edPicked().slice(0, 3000); if (!rows.length) return;
+  try {
+    const r = await post('/api/edit/bestoffer/scan', { items: rows.map(x => ({ account_id: x.aid, item_id: x.id })) });
+    toast(`Reading Best Offer for ${n0(r.queued)} listings…`);
+    EL.boScan = { running: true, total: r.queued, done: 0 }; edBoNote(edPicked());
+    clearInterval(edBoPoll);
+    edBoPoll = setInterval(async () => {
+      try {
+        const p = await api('/api/edit/bestoffer/scan'); EL.boScan = p; edBoNote(edPicked());
+        if (!p.running) { clearInterval(edBoPoll); EL = await api('/api/edit/listings'); drawList(); toast(`Best Offer read for ${n0(p.done)} listings` + (p.failed ? ` (${p.failed} failed)` : '')); }
+      } catch (e) { clearInterval(edBoPoll); }
+    }, 3000);
+  } catch (e) { toast(e.message); }
+};
+$('edBoHow').addEventListener('change', () => { document.querySelectorAll('.bo-set').forEach(x => x.hidden = $('edBoHow').value === 'off'); $('edPrevPanel').hidden = true; });
 $('edAd').addEventListener('change', () => EL && drawList());
 $('edListMore').onclick = () => { edLState.limit += 200; drawList(); };
 $('edNone').onclick = () => { edPicked().forEach(r => edOff.add(edKey(r))); drawList(); };
@@ -714,9 +742,14 @@ async function edFitment(picked) {
   edShowPreview(out, same, 'titles can be improved from fitment');
 }
 const FLD_NAME = { price: 'Price', qty: 'Stock', title: 'Title', specific: 'Item specific', bestoffer: 'Best Offer', fitment: 'Fitment' };
-const boText = v => !v ? '–' : v.restore !== undefined ? boText(v.restore || { enabled: false }) : v.enabled === false ? 'off' :
+const boText = v => !v ? '–' : v.off ? 'turn off' : v.restore !== undefined ? boText(v.restore || { enabled: false }) : v.enabled === false ? 'off' :
   [v.accept ? `accept from ${gbp(v.accept)}` : '', v.decline ? `decline below ${gbp(v.decline)}` : ''].filter(Boolean).join(' · ') || 'on';
 function edBestOffer(picked) {
+  if ($('edBoHow').value === 'off') {
+    const out = picked.map(r => r.bo && !r.bo.on ? { ...r, fld: 'bestoffer', cur: null, nv: null, ok: false, note: 'Best Offer is already off' }
+      : { ...r, fld: 'bestoffer', cur: null, nv: { off: true }, ok: true, note: r.bo ? `Read from eBay ${ago(r.bo.at)}; checked again when applied` : 'Not read yet: if Best Offer is already off, eBay is left as it is' });
+    edMode = 'bestoffer'; edShowPreview(out, 0, 'listings get Best Offer turned off'); return;
+  }
   const pf = edProfitFn(), acc = (+$('edBoAcc').value || 0) / 100, minP = +$('edBoMinP').value || 0, ad = (+$('edBoAd').value || 0) / 100, on = $('edBoOn').checked;
   const ceil2 = v => Math.ceil(v * 100 - 1e-6) / 100, floor2 = v => Math.floor(v * 100 + 1e-6) / 100;
   const out = [];
@@ -740,7 +773,7 @@ function drawEdit() {
     { h: `<input type="checkbox" id="edAll" aria-label="Select all" checked>`, l: 1, v: () => 0, f: r => `<input type="checkbox" class="ed-sel" data-k="${r.aid}|${esc(r.id)}|${r.fld}" ${r.ok ? 'checked' : 'disabled'} aria-label="Select ${esc(r.sku || r.id)}">` },
     { h: 'Listing', l: 1, cl: 'prod', v: r => r.sku, f: r => `<span class="t">${esc(r.fld === 'title' ? r.cur : r.t)}</span><span class="s"><span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)} · ${esc(r.sku || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(r.id)}" target="_blank" rel="noopener">${esc(r.id)}</a></span>` },
     { h: 'Change', l: 1, v: r => r.fld, f: r => FLD_NAME[r.fld] },
-    { h: 'Now', l: 1, cl: 'prod', v: r => typeof r.cur === 'number' ? r.cur : String(r.cur ?? ''), f: r => r.fld === 'specific' || r.fld === 'bestoffer' ? '<span class="muted">read when applied</span>' : r.fld === 'title' ? `<span class="oldv">${esc(r.cur)}</span>` : edFmt(r.fld, r.cur) },
+    { h: 'Now', l: 1, cl: 'prod', v: r => typeof r.cur === 'number' ? r.cur : String(r.cur ?? ''), f: r => r.fld === 'bestoffer' && r.bo ? esc(r.bo.on ? boText({ enabled: true, accept: r.bo.accept, decline: r.bo.decline }) : 'off') : r.fld === 'specific' || r.fld === 'bestoffer' ? '<span class="muted">read when applied</span>' : r.fld === 'title' ? `<span class="oldv">${esc(r.cur)}</span>` : edFmt(r.fld, r.cur) },
     { h: 'New', l: 1, cl: 'prod', v: r => typeof r.nv === 'number' ? r.nv : String(r.nv ?? ''), f: r => `<b>${edFmt(r.fld, r.nv)}</b>` },
     { h: 'Notes', l: 1, cl: 'prod', v: r => r.note, f: r => `<span class="${r.ok ? 'muted' : 'neg'}">${esc(r.note)}</span>` }];
   table($('edTable'), cols, edRows, null, edState);
@@ -765,7 +798,7 @@ $('edApply').onclick = async () => {
   const nList = new Set(ch.map(x => x.aid + '|' + x.id)).size;
   if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = `Click again to change ${n0(nList)} live listings`; setTimeout(() => { b.dataset.sure = ''; b.textContent = 'Apply to eBay'; }, 6000); return; }
   b.dataset.sure = ''; b.textContent = 'Apply to eBay';
-  const summary = edMode === 'bestoffer' ? `Best Offer: accept up to ${$('edBoAcc').value}% off, decline below the £${$('edBoMinP').value} profit floor` : edMode === 'fitment' ? 'Title from fitment (years, make/model, OE)' : edMode === 'typed' ? `Typed changes on ${nList} listing${nList === 1 ? '' : 's'}`
+  const summary = edMode === 'bestoffer' && $('edBoHow').value === 'off' ? 'Best Offer: turn off' : edMode === 'bestoffer' ? `Best Offer: accept up to ${$('edBoAcc').value}% off, decline below the £${$('edBoMinP').value} profit floor` : edMode === 'fitment' ? 'Title from fitment (years, make/model, OE)' : edMode === 'typed' ? `Typed changes on ${nList} listing${nList === 1 ? '' : 's'}`
     : fld === 'price' ? { profit: `Price: profit at least £${$('edPriceVal').value} after ${$('edAd').value}% ads`, pct: `Price ${$('edPriceVal').value}%`, add: `Price ${$('edPriceVal').value >= 0 ? '+' : ''}£${$('edPriceVal').value}`, set: `Price set to £${$('edPriceVal').value}` }[$('edPriceHow').value]
     : fld === 'qty' ? `Quantity set to ${$('edQty').value}` : fld === 'title' ? `Title: ${$('edTitleHow').selectedOptions[0].text.toLowerCase()} "${$('edTitleHow').value === 'replace' ? $('edFind').value + '" → "' + $('edRepl').value : $('edRepl').value}"`
     : `${$('edSpecName').value} = ${$('edSpecVal').value} (${$('edSpecMode').value === 'missing' ? 'where missing' : 'all'})`;

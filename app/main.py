@@ -454,6 +454,7 @@ def edit_listings(request: Request):
         sku_map = {r["item_id"]: r["sku"] for r in con.execute("SELECT item_id,sku FROM sku_map")}
         connected = {r[0] for r in con.execute("SELECT account_id FROM ebay_tokens")}
         ads = {(r["account_id"], r["item_id"]): r["rate"] for r in con.execute("SELECT account_id,item_id,rate FROM ad_rates")}
+        bo = {(r["account_id"], r["item_id"]): [r["enabled"], r["accept"], r["decline"], r["checked_at"]] for r in con.execute("SELECT * FROM bo_state")}
         out = []
         for a in sorted(connected):
             active = set(EB.active_listing_ids(con, a))
@@ -462,8 +463,29 @@ def edit_listings(request: Request):
                     continue
                 sku = sku_map.get(r["item_id"]) or r["sku"] or ""
                 out.append([a, r["item_id"], sku, PR.group_of(sku), r["title"] or "", r["price"], r["qty"], r["sold"] or 0,
-                            ads.get((a, r["item_id"]))])
-    return {"rows": out, "connected": sorted(connected)}
+                            ads.get((a, r["item_id"])), bo.get((a, r["item_id"]))])
+    return {"rows": out, "connected": sorted(connected), "boScan": ED.BO_PROGRESS}
+
+
+@app.post("/api/edit/bestoffer/scan")
+async def edit_bo_scan(request: Request):
+    """Read Best Offer settings from eBay for these listings (in the background)."""
+    need_user(request)
+    b = await request.json()
+    targets = [(int(x["account_id"]), str(x["item_id"])) for x in (b.get("items") or [])][:3000]
+    if not targets:
+        raise HTTPException(400, "No listings to read.")
+    if ED.BO_PROGRESS["running"]:
+        raise HTTPException(400, "Already reading Best Offer settings; wait for it to finish.")
+    import threading
+    threading.Thread(target=ED.scan_best_offer, args=(DB.db, targets), daemon=True).start()
+    return {"queued": len(targets)}
+
+
+@app.get("/api/edit/bestoffer/scan")
+def edit_bo_scan_progress(request: Request):
+    need_user(request)
+    return ED.BO_PROGRESS
 
 
 @app.post("/api/edit/jobs")
@@ -480,6 +502,8 @@ async def edit_new_job(request: Request):
             raise HTTPException(400, "One of the changes is incomplete.")
         if c["field"] == "bestoffer":
             n = c["new"]
+            if isinstance(n, dict) and n.get("off") is True and len(n) == 1:
+                continue  # turn Best Offer off
             if not isinstance(n, dict) or "restore" in n or not (0 < float(n.get("decline") or 0) < float(n.get("accept") or 0)):
                 raise HTTPException(400, f"Best Offer prices for {c['item_id']} must have decline below accept.")
         if c["field"] == "price" and not (0.99 <= float(c["new"]) <= 99999):

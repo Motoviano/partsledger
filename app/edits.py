@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS edit_items(
   sku TEXT, title TEXT, field TEXT NOT NULL, old_value TEXT, new_value TEXT,
   status TEXT DEFAULT 'waiting', message TEXT);
 CREATE INDEX IF NOT EXISTS edit_items_job ON edit_items(job_id);
+CREATE TABLE IF NOT EXISTS bo_state(
+  account_id INTEGER NOT NULL, item_id TEXT NOT NULL, enabled INTEGER, accept REAL, decline REAL, checked_at TEXT,
+  PRIMARY KEY(account_id, item_id));
 """
 FIELDS = {"price", "qty", "title", "specific", "bestoffer", "fitment"}
 _lock = threading.Lock()
@@ -134,6 +137,11 @@ def apply_one(token, it):
         return f"{name} set to {', '.join(value)}" + (f" (was {', '.join(cur)})" if cur else ""), json.dumps(cur)
     if f == "bestoffer":
         cur = _best_offer(token, it["item_id"])
+        if new.get("off"):
+            if not cur["enabled"]:
+                raise Skip("Best Offer is already off")
+            _write_best_offer(token, it["item_id"], False, None, None)
+            return f"Best Offer turned off (was {_bo_text(cur)})", json.dumps(cur)
         if "restore" in new:  # undo: put back exactly what was there
             want = new["restore"] or {"enabled": False, "accept": None, "decline": None}
             _write_best_offer(token, it["item_id"], want["enabled"], want.get("accept"), want.get("decline"))
@@ -209,9 +217,46 @@ def _update_local(con, it):
         con.execute("UPDATE listings SET qty=? WHERE account_id=? AND item_id=?", (int(new), it["account_id"], it["item_id"]))
     elif it["field"] == "title":
         con.execute("UPDATE listings SET title=? WHERE account_id=? AND item_id=?", (new, it["account_id"], it["item_id"]))
+    elif it["field"] == "bestoffer":
+        st = new.get("restore", new) if "restore" in new else ({"enabled": False} if new.get("off") else {"enabled": True, **new})
+        st = st or {"enabled": False}
+        con.execute("INSERT OR REPLACE INTO bo_state VALUES(?,?,?,?,?,?)", (it["account_id"], it["item_id"], int(bool(st.get("enabled"))),
+                    st.get("accept") if st.get("enabled") else None, st.get("decline") if st.get("enabled") else None, _now()))
     elif it["field"] == "fitment":
         from . import fitment as FT
         FT.store_rows(con, it["account_id"], it["item_id"], new["restore"] if "restore" in new else new["rows"])
+
+
+# ------------------------------------------------------------------ reading Best Offer settings from eBay
+BO_PROGRESS = {"running": False, "total": 0, "done": 0, "failed": 0}
+
+
+def _now():
+    import datetime as _dt
+    return _dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def scan_best_offer(db_factory, targets):
+    """GetItem for each listing; keeps whether Best Offer is on and its accept/decline prices."""
+    BO_PROGRESS.update(running=True, total=len(targets), done=0, failed=0)
+    tokens = {}
+    try:
+        for a, item in targets:
+            try:
+                if a not in tokens:
+                    with db_factory() as con:
+                        tokens[a] = EB.access_token(con, a)
+                b = _best_offer(tokens[a], item)
+                with db_factory() as con:
+                    con.execute("INSERT OR REPLACE INTO bo_state VALUES(?,?,?,?,?,?)", (a, item, int(b["enabled"]), b["accept"], b["decline"], _now()))
+            except Exception:
+                BO_PROGRESS["failed"] += 1
+                DB.log_exc("edits.scan_best_offer", level="warn")
+            BO_PROGRESS["done"] += 1
+            time.sleep(0.12)
+        DB.log("info", "bulk edit", f"Best Offer read for {BO_PROGRESS['done']} listings ({BO_PROGRESS['failed']} failed)")
+    finally:
+        BO_PROGRESS["running"] = False
 
 
 # ------------------------------------------------------------------ jobs
