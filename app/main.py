@@ -508,6 +508,10 @@ async def edit_new_job(request: Request):
                 continue  # turn Best Offer off
             if not isinstance(n, dict) or "restore" in n or not (0 < float(n.get("decline") or 0) < float(n.get("accept") or 0)):
                 raise HTTPException(400, f"Best Offer prices for {c['item_id']} must have decline below accept.")
+        if c["field"] == "end":
+            if not isinstance(c["new"], dict) or c["new"].get("reason") not in ("NotAvailable", "LostOrBroken", "Incorrect", "OtherListingError"):
+                raise HTTPException(400, "Choose why the listings are being ended.")
+            continue
         if c["field"] == "price" and not (0.99 <= float(c["new"]) <= 99999):
             raise HTTPException(400, f"Price for {c['item_id']} must be between £0.99 and £99,999.")
         if c["field"] == "qty" and not (0 <= int(c["new"]) <= 99999):
@@ -560,6 +564,8 @@ def edit_undo(job_id: int, request: Request):
             raise HTTPException(400, "Wait for this job to finish first.")
         if j["undone_by"]:
             raise HTTPException(400, f"Already undone (job #{j['undone_by']}).")
+        if j["kind"] == "end":
+            raise HTTPException(400, "Ended listings can't be put back from the app. In Seller Hub, open Listings → Unsold and relist the ones you need.")
         ch = ED.undo_changes(con, job_id)
         if not ch:
             raise HTTPException(400, "Nothing in this job went through, so there's nothing to undo.")

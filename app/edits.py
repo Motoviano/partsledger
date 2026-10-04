@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS bo_state(
   account_id INTEGER NOT NULL, item_id TEXT NOT NULL, enabled INTEGER, accept REAL, decline REAL, checked_at TEXT,
   PRIMARY KEY(account_id, item_id));
 """
-FIELDS = {"price", "qty", "title", "specific", "bestoffer", "fitment"}
+FIELDS = {"price", "qty", "title", "specific", "bestoffer", "fitment", "end"}
 _lock = threading.Lock()
 
 
@@ -155,6 +155,23 @@ def apply_one(token, it):
         _write_best_offer(token, it["item_id"], True, new["accept"], new["decline"])
         return ("Best Offer " + ("turned on: " if not cur["enabled"] else "set: ") + _bo_text({"enabled": True, **new})
                 + (f" (was {_bo_text(cur)})" if cur["enabled"] else "")), json.dumps(cur)
+    if f == "end":
+        # read the listing first: never end one that's already gone, or (unless asked) one that has stock on eBay
+        def b(root):
+            EB._el(root, "ItemID", it["item_id"])
+        item = EB.trading("GetItem", token, b).find(N + "Item")
+        status = item.findtext(f"{N}SellingStatus/{N}ListingStatus") or ""
+        if status and status != "Active":
+            raise Skip(f"Already ended on eBay ({status.lower()})")
+        left = int(item.findtext(N + "Quantity") or 0) - int(item.findtext(f"{N}SellingStatus/{N}QuantitySold") or 0)
+        if left > 0 and not new.get("force"):
+            raise Skip(f"Has {left} in stock on eBay now, so it was left live")
+
+        def e(root):
+            EB._el(root, "ItemID", it["item_id"])
+            EB._el(root, "EndingReason", new.get("reason") or "NotAvailable")
+        EB.trading("EndFixedPriceItem", token, e)
+        return f"Listing ended ({left} in stock, {item.findtext(f'{N}SellingStatus/{N}QuantitySold') or 0} sold)", json.dumps({"qty": left})
     if f == "fitment":
         from . import fitment as FT
         cur = FT.current_rows(token, it["item_id"])
@@ -217,6 +234,8 @@ def _update_local(con, it):
         con.execute("UPDATE listings SET qty=? WHERE account_id=? AND item_id=?", (int(new), it["account_id"], it["item_id"]))
     elif it["field"] == "title":
         con.execute("UPDATE listings SET title=? WHERE account_id=? AND item_id=?", (new, it["account_id"], it["item_id"]))
+    elif it["field"] == "end":  # no longer live: drop it from the active listings until the next sync confirms
+        con.execute("UPDATE listings SET updated_at='2000-01-01', qty=0 WHERE account_id=? AND item_id=?", (it["account_id"], it["item_id"]))
     elif it["field"] == "bestoffer":
         st = new.get("restore", new) if "restore" in new else ({"enabled": False} if new.get("off") else {"enabled": True, **new})
         st = st or {"enabled": False}
@@ -306,6 +325,8 @@ def undo_changes(con, job_id):
     """Changes that put back what the job changed (only the ones that went through)."""
     out = []
     for r in con.execute("SELECT * FROM edit_items WHERE job_id=? AND status='ok' ORDER BY id", (job_id,)):
+        if r["field"] == "end":
+            continue  # an ended listing can't be put back from here: relist it in Seller Hub (Unsold) if needed
         old = json.loads(r["old_value"]) if r["old_value"] else None
         new = json.loads(r["new_value"])
         if r["field"] in ("bestoffer", "fitment"):

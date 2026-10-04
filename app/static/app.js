@@ -516,6 +516,7 @@ function edShowOpts() {
     price: how === 'profit' ? 'Works out the lowest price that leaves this profit after COGS, postage (your average label cost for the SKU), eBay fees (each account\'s own rate over the last 90 days) and ads.' : 'Changes the Buy It Now price.',
     qty: 'Sets the quantity available. 0 keeps the listing but shows it as out of stock (if out-of-stock control is on in eBay). For SKUs in Stock sync, change the stock number on the Stock sync page instead, or the sync will put it back.',
     title: 'eBay titles can be up to 80 characters. Listings that would go over are left out.',
+    end: 'Ends the ticked listings on eBay (in Step 1, set Stock to Out of stock to find them). Each listing is read from eBay first: one that already ended, or that has stock again, is left alone. Ended listings can\'t be undone here, but eBay keeps them under Seller Hub → Listings → Unsold, where they can be relisted. Sales history stays in Partsledger.',
     bestoffer: 'Buyers\' offers at or above the accept price are accepted at once; offers below the decline price are declined at once (so no sale can leave less than your minimum profit after COGS, postage, eBay fees and ads). Offers in between wait for you in Seller Hub. The current Best Offer settings are read from eBay first, so Undo puts them back.',
     fitment: 'Reads each ticked listing\'s fitment rows and item specifics from eBay, then adds what the title is missing: make and model, the year range (e.g. 2012-2023, after the model and platform such as MK8) and the OE number. Nothing is removed and titles stay within 80 characters. Up to 500 listings at a time.',
     specific: 'Adds or changes one item specific. The listing\'s other specifics stay as they are. Several values: separate them with |.',
@@ -669,6 +670,12 @@ $('edPreview').onclick = () => {
   if (!picked.length) return toast('No listings are ticked in step 1.');
   if (fld === 'fitment') return edFitment(picked);
   if (fld === 'bestoffer') return edBestOffer(picked);
+  if (fld === 'end') {
+    const oos = $('edEndOos').checked, why = $('edEndWhy').value;
+    const out = picked.map(r => oos && r.qty > 0 ? { ...r, fld: 'end', cur: r.qty, nv: null, ok: false, note: `Has ${n0(r.qty)} in stock: left live (untick "Only listings with no stock" to end it anyway)` }
+      : { ...r, fld: 'end', cur: r.qty, nv: { reason: why, force: !oos }, ok: true, note: `${n0(r.sold)} sold so far · stock is checked on eBay again just before ending` + (r.qty > 0 ? ` · has ${n0(r.qty)} in stock` : '') });
+    edMode = 'end'; edShowPreview(out, 0, 'listings to end'); return;
+  }
   const pf = edProfitFn(), out = [];
   let same = 0;
   for (const r of picked) {
@@ -750,7 +757,7 @@ async function edFitment(picked) {
   edMode = 'fitment';
   edShowPreview(out, same, 'titles can be improved from fitment');
 }
-const FLD_NAME = { price: 'Price', qty: 'Stock', title: 'Title', specific: 'Item specific', bestoffer: 'Best Offer', fitment: 'Fitment' };
+const FLD_NAME = { price: 'Price', qty: 'Stock', title: 'Title', specific: 'Item specific', bestoffer: 'Best Offer', fitment: 'Fitment', end: 'End listing' };
 const boText = v => !v ? '–' : v.off ? 'turn off' : v.restore !== undefined ? boText(v.restore || { enabled: false }) : v.enabled === false ? 'off' :
   [v.accept ? `accept from ${gbp(v.accept)}` : '', v.decline ? `decline below ${gbp(v.decline)}` : ''].filter(Boolean).join(' · ') || 'on';
 function edBestOffer(picked) {
@@ -776,7 +783,7 @@ function edBestOffer(picked) {
   edMode = 'bestoffer';
   edShowPreview(out, 0, 'listings get Best Offer rules');
 }
-function edFmt(fld, v) { return v == null ? '–' : fld === 'bestoffer' ? esc(boText(v)) : fld === 'price' ? gbp(v) : fld === 'qty' ? n0(v) : fld === 'specific' ? `${esc(v.name)}: <b>${esc(v.value)}</b>` : esc(v); }
+function edFmt(fld, v) { return fld === 'end' ? (v && v.reason ? '<span class="neg">End listing</span>' : v && v.qty != null ? `live, ${n0(v.qty)} in stock` : typeof v === 'number' ? `live, ${n0(v)} in stock` : '–') : v == null ? '–' : fld === 'bestoffer' ? esc(boText(v)) : fld === 'price' ? gbp(v) : fld === 'qty' ? n0(v) : fld === 'specific' ? `${esc(v.name)}: <b>${esc(v.value)}</b>` : esc(v); }
 function drawEdit() {
   const cols = [
     { h: `<input type="checkbox" id="edAll" aria-label="Select all" checked>`, l: 1, v: () => 0, f: r => `<input type="checkbox" class="ed-sel" data-k="${r.aid}|${esc(r.id)}|${r.fld}" ${r.ok ? 'checked' : 'disabled'} aria-label="Select ${esc(r.sku || r.id)}">` },
@@ -807,7 +814,7 @@ $('edApply').onclick = async () => {
   const nList = new Set(ch.map(x => x.aid + '|' + x.id)).size;
   if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = `Click again to change ${n0(nList)} live listings`; setTimeout(() => { b.dataset.sure = ''; b.textContent = 'Apply to eBay'; }, 6000); return; }
   b.dataset.sure = ''; b.textContent = 'Apply to eBay';
-  const summary = edMode === 'bestoffer' && $('edBoHow').value === 'off' ? 'Best Offer: turn off' : edMode === 'bestoffer' ? `Best Offer: accept up to ${$('edBoAcc').value}% off, decline below the £${$('edBoMinP').value} profit floor` : edMode === 'fitment' ? 'Title from fitment (years, make/model, OE)' : edMode === 'typed' ? `Typed changes on ${nList} listing${nList === 1 ? '' : 's'}`
+  const summary = edMode === 'end' ? `End listings (${$('edEndWhy').selectedOptions[0].text.toLowerCase()}${$('edEndOos').checked ? ', only with no stock' : ''})` : edMode === 'bestoffer' && $('edBoHow').value === 'off' ? 'Best Offer: turn off' : edMode === 'bestoffer' ? `Best Offer: accept up to ${$('edBoAcc').value}% off, decline below the £${$('edBoMinP').value} profit floor` : edMode === 'fitment' ? 'Title from fitment (years, make/model, OE)' : edMode === 'typed' ? `Typed changes on ${nList} listing${nList === 1 ? '' : 's'}`
     : fld === 'price' ? { profit: `Price: profit at least £${$('edPriceVal').value} after ${$('edAd').value}% ads`, pct: `Price ${$('edPriceVal').value}%`, add: `Price ${$('edPriceVal').value >= 0 ? '+' : ''}£${$('edPriceVal').value}`, set: `Price set to £${$('edPriceVal').value}` }[$('edPriceHow').value]
     : fld === 'qty' ? `Quantity set to ${$('edQty').value}` : fld === 'title' ? `Title: ${$('edTitleHow').selectedOptions[0].text.toLowerCase()} "${$('edTitleHow').value === 'replace' ? $('edFind').value + '" → "' + $('edRepl').value : $('edRepl').value}"`
     : `${$('edSpecName').value} = ${$('edSpecVal').value} (${$('edSpecMode').value === 'missing' ? 'where missing' : 'all'})`;
@@ -824,7 +831,7 @@ async function renderEditJobs() {
     <td class="l">${j.id}</td><td class="l">${esc(j.created_at.slice(0, 16))}</td><td class="l prod">${esc(j.summary)}<span class="sub">${esc(j.created_by || '')}</span></td>
     <td>${j.total}</td><td>${j.ok}</td><td>${j.skipped}</td><td>${j.failed}</td>
     <td class="l">${j.status === 'running' || j.status === 'queued' ? `<span class="chip b">Working ${j.done}/${j.total}</span>` : j.undone_by ? `<span class="chip ret">Undone by #${j.undone_by}</span>` : `<span class="chip k">${esc(j.status)}</span>`}</td>
-    <td><button class="link" type="button" data-edshow="${j.id}">Details</button>${j.status === 'finished' && j.ok && !j.undone_by ? ` <button class="link danger" type="button" data-edundo="${j.id}">Undo</button>` : ''}</td></tr>`).join('')}</tbody>`
+    <td><button class="link" type="button" data-edshow="${j.id}">Details</button>${j.status === 'finished' && j.ok && !j.undone_by && j.kind !== 'end' ? ` <button class="link danger" type="button" data-edundo="${j.id}">Undo</button>` : ''}</td></tr>`).join('')}</tbody>`
     : '<tbody><tr><td class="empty">No bulk edits yet.</td></tr></tbody>';
   document.querySelectorAll('[data-edshow]').forEach(b => b.onclick = () => showEditJob(+b.dataset.edshow));
   document.querySelectorAll('[data-edundo]').forEach(b => b.onclick = async () => {
