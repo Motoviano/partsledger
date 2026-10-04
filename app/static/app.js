@@ -706,7 +706,7 @@ async function edFitment(picked) {
   edMode = 'fitment';
   edShowPreview(out, same, 'titles can be improved from fitment');
 }
-const FLD_NAME = { price: 'Price', qty: 'Stock', title: 'Title', specific: 'Item specific', bestoffer: 'Best Offer' };
+const FLD_NAME = { price: 'Price', qty: 'Stock', title: 'Title', specific: 'Item specific', bestoffer: 'Best Offer', fitment: 'Fitment' };
 const boText = v => !v ? '–' : v.restore !== undefined ? boText(v.restore || { enabled: false }) : v.enabled === false ? 'off' :
   [v.accept ? `accept from ${gbp(v.accept)}` : '', v.decline ? `decline below ${gbp(v.decline)}` : ''].filter(Boolean).join(' · ') || 'on';
 function edBestOffer(picked) {
@@ -786,7 +786,7 @@ async function renderEditJobs() {
 async function showEditJob(id) {
   clearTimeout(edJobTimer);
   const { job, items } = await api('/api/edit/jobs/' + id), run = job.status === 'running' || job.status === 'queued';
-  const fmt = (f, v) => { try { v = JSON.parse(v); } catch (e) { } return f === 'bestoffer' ? esc(boText(v)) : f === 'specific' ? (v && v.name ? `${esc(v.name)}: ${esc(v.value ?? (v.restore ? v.restore.join(', ') : 'not set'))}` : Array.isArray(v) ? esc(v.join(', ')) : '–') : edFmt(f, v); };
+  const fmt = (f, v) => { try { v = JSON.parse(v); } catch (e) { } if (f === 'fitment') return v == null ? '–' : `${n0(v.rows ?? 0)} fitment rows`; return f === 'bestoffer' ? esc(boText(v)) : f === 'specific' ? (v && v.name ? `${esc(v.name)}: ${esc(v.value ?? (v.restore ? v.restore.join(', ') : 'not set'))}` : Array.isArray(v) ? esc(v.join(', ')) : '–') : edFmt(f, v); };
   $('edJob').innerHTML = `<div class="panel-head"><div><h2>#${job.id}: ${esc(job.summary)}</h2><p>${job.done} of ${job.total} done · ${job.ok} changed · ${job.skipped} skipped · ${job.failed} failed · ${run ? 'working…' : esc(job.status)}</p></div></div>
     <div class="tbl-wrap"><table><thead><tr><th class="l">Account</th><th class="l">Listing</th><th class="l">Before</th><th class="l">After</th><th class="l">Result</th></tr></thead><tbody>${items.map(i => `<tr>
       <td class="l">${esc(i.account)}</td><td class="l prod"><span class="t">${esc(i.title || '')}</span><span class="s">${esc(i.sku || '')} · <a href="https://www.ebay.co.uk/itm/${esc(i.item_id)}" target="_blank" rel="noopener">${esc(i.item_id)}</a></span></td>
@@ -1683,8 +1683,69 @@ $('cpSave').onclick = async () => {
 };
 $('cpAuto').onclick = async () => { try { await post('/api/compete/settings', { comp_auto: !CPD.settings.comp_auto }); renderCompete(); } catch (e) { toast(e.message); } };
 
+// ---------------------------------------------------------------- fitment check
+let FTD = null, ftOff = new Set(), ftOpen = null, ftPoll = null;
+const ftState = { sort: null, limit: 500, render: () => drawFitment(), empty: 'No listings for this selection.' };
+const FTC = { none: ['No fitment', 'm'], make: ['Make mismatch', 'm'], fewer: ['Fewer rows', 'ret'], years: ['Years differ', 'b'], model: ['Title', 'b'] };
+async function renderFitment() {
+  try { FTD = await api('/api/fitment'); } catch (e) { toast(e.message); return; }
+  const pr = FTD.progress;
+  $('ftStatus').innerHTML = pr.running ? `<b>Checking ${n0(pr.done)} of ${n0(pr.total)} listings…</b>` : pr.started ? `Last check: ${n0(pr.done)} listings${pr.failed ? `, ${n0(pr.failed)} failed` : ''}.` : 'Click Check listings to read the fitment of the listings shown.';
+  drawFitment();
+  clearTimeout(ftPoll); if (pr.running && page === 'fitment') ftPoll = setTimeout(renderFitment, 4000);
+}
+function ftRows() {
+  const f = F(), q = $('ftSearch').value.trim().toLowerCase(), v = $('ftView').value;
+  return (FTD ? FTD.rows : []).map(r => ({ ...r, a: AIDX[r.account_id], k: r.account_id + '|' + r.item_id })).filter(r => r.a !== undefined && f.a.has(r.a)
+    && (!q || (r.sku || '').toLowerCase().includes(q) || (r.title || '').toLowerCase().includes(q))
+    && (v === 'all' || (v === 'unchecked' ? !r.checked : v === 'problems' ? r.issues.length : v === 'ok' ? r.checked && r.status === 'ok' && !r.issues.length : r.issues.some(i => i.code === v))));
+}
+const ftCan = r => r.issues.some(i => i.code === 'fewer');
+function drawFitment() {
+  if (!FTD) return;
+  const f = F(), all = FTD.rows.filter(r => AIDX[r.account_id] !== undefined && f.a.has(AIDX[r.account_id])), chk = all.filter(r => r.checked && r.status === 'ok');
+  const has = c => all.filter(r => r.issues.some(i => i.code === c)).length;
+  const stat = (k, v, sub) => `<div class="stat"><small>${k}</small><b>${v}</b>${sub ? `<span>${sub}</span>` : ''}</div>`;
+  $('ftStats').innerHTML = stat('Checked', n0(chk.length), `of ${n0(all.length)} listings`) + stat('No fitment', n0(has('none')), 'in categories that take it') +
+    stat('Make mismatch', n0(has('make')), 'title vs fitment') + stat('Fewer rows', n0(has('fewer')), 'than the same SKU elsewhere') +
+    stat('Years differ', n0(has('years')), 'title vs fitment') + stat('Title misses fitment', n0(has('model')), 'main make/model');
+  const rows = ftRows();
+  table($('ftTable'), [
+    { h: '', l: 1, v: r => ftCan(r) ? 0 : 1, f: r => ftCan(r) ? `<input type="checkbox" class="ft-sel" data-k="${esc(r.k)}" ${ftOff.has(r.k) ? '' : 'checked'} aria-label="Copy fitment to ${esc(r.sku || r.item_id)}">` : '' },
+    { h: 'Listing', l: 1, cl: 'prod', v: r => r.title || '', f: r => `<span class="t">${esc(r.title || r.item_id)}</span><span class="s"><span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)} · ${esc(r.sku || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(r.item_id)}" target="_blank" rel="noopener">${esc(r.item_id)}</a></span>` },
+    { h: 'Fitment rows', v: r => r.rows ?? -1, f: r => r.rows == null ? (r.status === 'error' ? '<span class="neg">error</span>' : '<span class="muted">not checked</span>') : r.rows ? `<a href="#" class="ft-open" data-k="${esc(r.k)}">${n0(r.rows)}</a>` : (r.supports === false ? '<span class="muted">0 · category has none</span>' : '0') },
+    { h: 'Main fitment', l: 1, v: r => r.fit[0] ? r.fit[0].make + ' ' + r.fit[0].model : '', f: r => r.fit[0] ? `${esc(r.fit[0].make)} ${esc(r.fit[0].model)}${r.fit[0].y0 ? ` <span class="muted">${r.fit[0].y0}–${r.fit[0].y1}</span>` : ''}${r.fit.length > 1 ? `<span class="sub">+ ${r.fit.length - 1} more make/model${r.fit.length > 2 ? 's' : ''}</span>` : ''}` : '–' },
+    { h: 'Problems', l: 1, cl: 'prod', v: r => -r.level, f: r => r.status === 'error' ? `<span class="neg">${esc(r.message || '')}</span>` : r.issues.length ? r.issues.map(i => `<div style="margin:2px 0"><span class="chip ${FTC[i.code][1]}">${FTC[i.code][0]}</span> <span class="muted">${esc(i.text)}</span></div>`).join('') : r.checked ? '<span class="chip k">OK</span>' : '' },
+    { h: 'Checked', v: r => r.checked || '', f: r => r.checked ? `<span class="muted">${ago(r.checked)}</span>` : '–' }],
+    ftState.sort ? rows : rows.sort((x, y) => y.level - x.level || (y.sold || 0) - (x.sold || 0)), null, ftState);
+  const t = $('ftTable');
+  t.querySelectorAll('.ft-sel').forEach(b => b.onchange = () => { b.checked ? ftOff.delete(b.dataset.k) : ftOff.add(b.dataset.k); ftCount(); });
+  t.querySelectorAll('.ft-open').forEach(a => a.onclick = e => { e.preventDefault(); ftOpen = ftOpen === a.dataset.k ? null : a.dataset.k; drawFitment(); });
+  if (ftOpen) {
+    const ri = (ftState.rows || []).findIndex(r => r.k === ftOpen), tr = t.querySelector(`tbody tr[data-ri="${ri}"]`), r = ftState.rows[ri];
+    if (r && tr) tr.insertAdjacentHTML('afterend', `<tr><td></td><td colspan="5" class="l"><table class="mini" style="width:auto;margin:6px 0 10px"><thead><tr><th class="l">Make</th><th class="l">Model</th><th class="l">Years</th><th>Rows</th></tr></thead><tbody>${r.fit.slice(0, 40).map(x => `<tr><td class="l">${esc(x.make)}</td><td class="l">${esc(x.model || '–')}</td><td class="l">${x.y0 ? x.y0 + '–' + x.y1 : '–'}</td><td>${n0(x.n)}</td></tr>`).join('')}${r.fit.length > 40 ? `<tr><td colspan="4" class="l muted">and ${r.fit.length - 40} more</td></tr>` : ''}</tbody></table></td></tr>`);
+  }
+  $('ftCheck').textContent = `Check ${n0(Math.min(rows.length, FTD.max))} listings`; $('ftCheck').disabled = !rows.length || FTD.progress.running;
+  ftCount();
+}
+function ftChosen() { return ftRows().filter(r => ftCan(r) && !ftOff.has(r.k)); }
+function ftCount() { const n = ftChosen().length; $('ftSel').textContent = n ? `${n0(n)} ticked to copy` : ''; $('ftCopy').disabled = !n; $('ftCopy').textContent = n ? `Copy fitment to ${n0(n)} listing${n === 1 ? '' : 's'}` : 'Copy fitment'; }
+['ftView', 'ftSearch'].forEach(id => $(id).addEventListener('input', () => { ftOpen = null; drawFitment(); }));
+$('ftCheck').onclick = async () => {
+  const b = $('ftCheck'), rs = ftRows().slice(0, FTD.max); if (!rs.length) return;
+  if (rs.length > 50 && b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = `Click again to read ${n0(rs.length)} listings from eBay`; setTimeout(() => { b.dataset.sure = ''; drawFitment(); }, 6000); return; }
+  b.dataset.sure = '';
+  try { const r = await post('/api/fitment/check', { items: rs.map(x => ({ account_id: x.account_id, item_id: x.item_id })) }); toast(`Checking ${n0(r.queued)} listings…`); setTimeout(renderFitment, 1500); } catch (e) { toast(e.message); }
+};
+$('ftCopy').onclick = async () => {
+  const b = $('ftCopy'), ch = ftChosen(); if (!ch.length) return;
+  if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = `Click again to change the fitment of ${n0(ch.length)} listings on eBay`; setTimeout(() => { b.dataset.sure = ''; ftCount(); }, 6000); return; }
+  b.dataset.sure = '';
+  try { const r = await post('/api/fitment/copy', { items: ch.map(x => ({ account_id: x.account_id, item_id: x.item_id })) }); toast(`Copying fitment to ${n0(r.changed)} listings. Follow it or undo it on Bulk edit → Recent edits.`); ftOff = new Set(); setTimeout(renderFitment, 6000); } catch (e) { toast(e.message); }
+};
+
 // ---------------------------------------------------------------- wiring
-const titles = { dash: 'Dashboard', orders: 'Sold items', traffic: 'Traffic', edit: 'Bulk edit', stock: 'Stock sync', msgs: 'Messages', ads: 'Ads', returns: 'Returns', payouts: 'Payouts', offers: 'Offers', promos: 'Discounts', compete: 'Competitors', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
+const titles = { dash: 'Dashboard', orders: 'Sold items', traffic: 'Traffic', edit: 'Bulk edit', stock: 'Stock sync', msgs: 'Messages', ads: 'Ads', returns: 'Returns', payouts: 'Payouts', offers: 'Offers', promos: 'Discounts', compete: 'Competitors', fitment: 'Fitment', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
 let page = 'dash';
 function show(p) {
   page = p; document.querySelectorAll('[data-p]').forEach(s => s.hidden = s.id !== 'p-' + p);
@@ -1709,6 +1770,7 @@ function renderAll() {
   if (page === 'offers') renderOffers();
   if (page === 'promos') renderPromos();
   if (page === 'compete') renderCompete();
+  if (page === 'fitment') renderFitment();
   if (page === 'cogs') { renderBands(); renderCogs(); }
   if (page === 'charts') renderCharts();
   if (page === 'uploads') renderUploads();

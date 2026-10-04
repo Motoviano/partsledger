@@ -26,6 +26,7 @@ from . import titles as TL
 from . import offers as OF
 from . import promos as PM
 from . import compete as CP
+from . import fitment as FT
 from .auth import check_pw, ensure_admin, hash_pw
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -52,6 +53,7 @@ def startup():
         con.executescript(OF.SCHEMA)
         con.executescript(PM.SCHEMA)
         con.executescript(CP.SCHEMA)
+        con.executescript(FT.SCHEMA)
         con.execute("UPDATE title_jobs SET status='stopped' WHERE status IN ('queued','running')")
         AP.migrate(con)
         con.execute("UPDATE ad_changes SET status='failed', message='Stopped by a restart; try again' WHERE status='waiting'")
@@ -499,8 +501,19 @@ def edit_job(job_id: int, request: Request):
         j = con.execute("SELECT * FROM edit_jobs WHERE id=?", (job_id,)).fetchone()
         if not j:
             raise HTTPException(404, "Job not found.")
-        return {"job": dict(j), "items": [dict(r) for r in con.execute(
-            "SELECT e.*, a.name AS account FROM edit_items e JOIN accounts a ON a.id=e.account_id WHERE job_id=? ORDER BY e.id", (job_id,))]}
+        items = [dict(r) for r in con.execute(
+            "SELECT e.*, a.name AS account FROM edit_items e JOIN accounts a ON a.id=e.account_id WHERE job_id=? ORDER BY e.id", (job_id,))]
+        for it in items:
+            if it["field"] == "fitment":  # fitment lists are long: the page only needs how many rows
+                for k in ("old_value", "new_value"):
+                    try:
+                        v = json.loads(it[k]) if it[k] else None
+                    except ValueError:
+                        v = None
+                    if isinstance(v, dict):
+                        v = v.get("restore", v.get("rows"))
+                    it[k] = json.dumps({"rows": len(v)}) if isinstance(v, list) else None
+        return {"job": dict(j), "items": items}
 
 
 @app.post("/api/edit/jobs/{job_id}/undo")
@@ -899,6 +912,55 @@ async def compete_apply(request: Request):
         for a in {c["account_id"] for c in changes}:
             EB.access_token(con, a)
         jid = ED.create_job(con, u["email"], "price", f"Competitor prices: {len(changes)} listings", changes)
+    ED.start(DB.db, jid)
+    return {"job": jid, "changed": len(changes)}
+
+
+# ------------------------------------------------------------------ fitment check
+@app.get("/api/fitment")
+def fitment(request: Request):
+    need_user(request)
+    with DB.db() as con:
+        return {"rows": FT.summarise(con), "progress": FT.PROGRESS, "max": FT.MAX_RUN}
+
+
+@app.post("/api/fitment/check")
+async def fitment_check(request: Request):
+    u = need_user(request)
+    b = await request.json()
+    targets = [(int(x["account_id"]), str(x["item_id"])) for x in b.get("items") or []]
+    if not targets:
+        raise HTTPException(400, "Choose the listings to check.")
+    if not FT.start_check(DB.db, targets, u["email"]):
+        raise HTTPException(400, "A check is already running; wait for it to finish.")
+    return {"queued": min(len(targets), FT.MAX_RUN), "capped": len(targets) > FT.MAX_RUN}
+
+
+@app.post("/api/fitment/copy")
+async def fitment_copy(request: Request):
+    """Copy fitment from the same SKU's listing with the most rows, through Bulk edit (undoable)."""
+    u = need_user(request)
+    b = await request.json()
+    want = {(int(x["account_id"]), str(x["item_id"])) for x in b.get("items") or []}
+    with DB.db() as con:
+        rows = FT.summarise(con, with_compat=True)
+        by = {(r["account_id"], r["item_id"]): r for r in rows}
+        names = {r["id"]: r["name"] for r in con.execute("SELECT id,name FROM accounts")}
+        changes = []
+        for r in rows:
+            if (r["account_id"], r["item_id"]) not in want:
+                continue
+            iss = next((i for i in r["issues"] if i["code"] == "fewer"), None)
+            src = by.get(tuple(iss["from"])) if iss else None
+            if not src or not src.get("compat"):
+                continue
+            changes.append({"account_id": r["account_id"], "item_id": r["item_id"], "sku": r["sku"], "title": r["title"], "field": "fitment",
+                            "old": None, "new": {"rows": json.loads(src["compat"]), "from": f"{names.get(src['account_id'], '')} {src['item_id']}".strip()}})
+        if not changes:
+            raise HTTPException(400, "None of the ticked listings has fitment to copy.")
+        for a in {c["account_id"] for c in changes}:
+            EB.access_token(con, a)
+        jid = ED.create_job(con, u["email"], "fitment", f"Copy fitment: {len(changes)} listings", changes)
     ED.start(DB.db, jid)
     return {"job": jid, "changed": len(changes)}
 

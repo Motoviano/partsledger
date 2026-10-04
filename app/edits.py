@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS edit_items(
   status TEXT DEFAULT 'waiting', message TEXT);
 CREATE INDEX IF NOT EXISTS edit_items_job ON edit_items(job_id);
 """
-FIELDS = {"price", "qty", "title", "specific", "bestoffer"}
+FIELDS = {"price", "qty", "title", "specific", "bestoffer", "fitment"}
 _lock = threading.Lock()
 
 
@@ -147,6 +147,17 @@ def apply_one(token, it):
         _write_best_offer(token, it["item_id"], True, new["accept"], new["decline"])
         return ("Best Offer " + ("turned on: " if not cur["enabled"] else "set: ") + _bo_text({"enabled": True, **new})
                 + (f" (was {_bo_text(cur)})" if cur["enabled"] else "")), json.dumps(cur)
+    if f == "fitment":
+        from . import fitment as FT
+        cur = FT.current_rows(token, it["item_id"])
+        want = new["restore"] if "restore" in new else new["rows"]
+        if not want and not cur:
+            raise Skip("No fitment to put back")
+        if "restore" not in new and len(cur) >= len(want):
+            raise Skip(f"Already has {len(cur)} fitment rows (the copy has {len(want)})")
+        FT.write_rows(token, it["item_id"], want)
+        return (f"Fitment put back: {len(want)} rows" if "restore" in new else
+                f"Fitment copied from {new.get('from', 'another listing')}: {len(want)} rows (was {len(cur)})"), json.dumps(cur)
     raise Skip("Unknown change")
 
 
@@ -198,6 +209,9 @@ def _update_local(con, it):
         con.execute("UPDATE listings SET qty=? WHERE account_id=? AND item_id=?", (int(new), it["account_id"], it["item_id"]))
     elif it["field"] == "title":
         con.execute("UPDATE listings SET title=? WHERE account_id=? AND item_id=?", (new, it["account_id"], it["item_id"]))
+    elif it["field"] == "fitment":
+        from . import fitment as FT
+        FT.store_rows(con, it["account_id"], it["item_id"], new["restore"] if "restore" in new else new["rows"])
 
 
 # ------------------------------------------------------------------ jobs
@@ -249,7 +263,7 @@ def undo_changes(con, job_id):
     for r in con.execute("SELECT * FROM edit_items WHERE job_id=? AND status='ok' ORDER BY id", (job_id,)):
         old = json.loads(r["old_value"]) if r["old_value"] else None
         new = json.loads(r["new_value"])
-        if r["field"] == "bestoffer":
+        if r["field"] in ("bestoffer", "fitment"):
             out.append({**dict(r), "old": new, "new": {"restore": old}})
         elif r["field"] == "specific":
             restore = {"name": new["name"], "restore": old}
