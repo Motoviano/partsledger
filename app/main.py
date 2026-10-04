@@ -24,6 +24,7 @@ from . import returns as RT
 from . import payouts as PO
 from . import titles as TL
 from . import offers as OF
+from . import promos as PM
 from .auth import check_pw, ensure_admin, hash_pw
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -48,6 +49,7 @@ def startup():
         con.executescript(PO.SCHEMA)
         con.executescript(TL.SCHEMA)
         con.executescript(OF.SCHEMA)
+        con.executescript(PM.SCHEMA)
         con.execute("UPDATE title_jobs SET status='stopped' WHERE status IN ('queued','running')")
         AP.migrate(con)
         con.execute("UPDATE ad_changes SET status='failed', message='Stopped by a restart; try again' WHERE status='waiting'")
@@ -64,6 +66,7 @@ def startup():
         RT.start_scheduler(DB.db)
         PO.start_scheduler(DB.db)
         OF.start_scheduler(DB.db)
+        PM.start_scheduler(DB.db)
 
 
 def uk_today():
@@ -704,6 +707,110 @@ def returns_check(request: Request):
     need_user(request)
     import threading
     threading.Thread(target=RT.check, args=(DB.db,), daemon=True).start()
+    return {"ok": True}
+
+
+# ------------------------------------------------------------------ discounts
+def _promo_preview(con, rule, kind="multibuy", pct=None, prefix="", max_price=None):
+    tiers = [pct] if kind == "sale" else rule["tiers"]
+    el = PM.eligible(con, rule, tiers=tiers, max_price=max_price, prefix=prefix, exclude_in_other=(kind != "sale"),
+                     stack=max(rule["tiers"]) if kind == "sale" else None)
+    return {str(a): {"in": [list(x) for x in v["in"]], "out": [list(x) for x in v["out"]]} for a, v in el.items()}
+
+
+@app.get("/api/promos")
+def promos(request: Request):
+    need_user(request)
+    with DB.db() as con:
+        managed = {r["promotion_id"]: r["part"] for r in con.execute("SELECT promotion_id, part FROM promo_managed")}
+        rows = []
+        for r in con.execute("SELECT account_id,promotion_id,name,type,status,start,end,listing_ids,scope,fetched_at FROM promo_cache ORDER BY account_id, start DESC"):
+            d = dict(r)
+            ids = json.loads(d.pop("listing_ids")) if r["listing_ids"] else None
+            d["listings"] = len(ids) if ids is not None else None
+            d["managed"] = r["promotion_id"] in managed
+            rows.append(d)
+        log = [dict(r) for r in con.execute("SELECT l.*, a.name AS account FROM promo_log l LEFT JOIN accounts a ON a.id=l.account_id ORDER BY l.id DESC LIMIT 100")]
+        fetched = con.execute("SELECT MAX(fetched_at) FROM promo_cache").fetchone()[0]
+        return {"promotions": rows, "rule": PM.get_rule(con), "log": log, "fetched": fetched}
+
+
+@app.post("/api/promos/refresh")
+def promos_refresh(request: Request):
+    need_user(request)
+    PM.refresh_all(DB.db)
+    return {"ok": True}
+
+
+@app.post("/api/promos/preview")
+async def promos_preview(request: Request):
+    need_user(request)
+    b = await request.json()
+    with DB.db() as con:
+        rule = PM.get_rule(con)
+        if b.get("kind") == "sale":
+            rule = {**rule, "min_profit": float(b.get("min_profit", rule["min_profit"]))}
+            return _promo_preview(con, rule, "sale", float(b.get("pct") or 0), str(b.get("prefix") or ""), float(b.get("max_price") or 0))
+        rule = PM.set_rule(con, {k: b[k] for k in ("tiers", "max_price", "min_profit", "exclude_prefixes") if k in b})
+        return _promo_preview(con, rule)
+
+
+@app.post("/api/promos/multibuy")
+async def promos_multibuy(request: Request):
+    u = need_user(request)
+    b = await request.json()
+    import threading
+    with DB.db() as con:
+        PM.set_rule(con, {"enabled": bool(b.get("enabled", True))})
+    if b.get("enabled", True):
+        threading.Thread(target=PM.sync_multibuy, args=(DB.db,), kwargs={"user": u["email"]}, daemon=True).start()
+    else:
+        threading.Thread(target=PM.stop_multibuy, args=(DB.db,), kwargs={"user": u["email"]}, daemon=True).start()
+    return {"ok": True}
+
+
+@app.post("/api/promos/sale")
+async def promos_sale(request: Request):
+    u = need_user(request)
+    b = await request.json()
+    pct = float(b.get("pct") or 0)
+    if not 5 <= pct <= 80:
+        raise HTTPException(400, "The sale discount must be between 5% and 80%.")
+    try:
+        start = datetime.fromisoformat(b["start"]); end = datetime.fromisoformat(b["end"])
+        if len(str(b["end"])) <= 10:
+            end = end.replace(hour=23, minute=59)  # a date on its own: the sale runs to the end of that day
+    except (KeyError, ValueError):
+        raise HTTPException(400, "Choose a start and end date.")
+    from datetime import timedelta
+    if end <= start or (end - start).days > 45:
+        raise HTTPException(400, "A sale can run for up to 45 days, and must end after it starts.")
+    start = max(start, datetime.utcnow() + timedelta(minutes=5))
+    accounts = {int(x) for x in b.get("accounts") or []}
+    with DB.db() as con:
+        rule = {**PM.get_rule(con), "min_profit": float(b.get("min_profit", 1))}
+        prev = _promo_preview(con, rule, "sale", pct, str(b.get("prefix") or ""), float(b.get("max_price") or 0))
+    todo = {int(a): [x[0] for x in v["in"]] for a, v in prev.items() if (not accounts or int(a) in accounts) and v["in"]}
+    if not todo:
+        raise HTTPException(400, "No listings qualify for this sale.")
+    import threading
+    def run():
+        for a, ids in todo.items():
+            try:
+                PM.create_sale(DB.db, a, str(b.get("name") or f"Sale {pct:g}% off")[:80], pct, ids, start, end, u["email"])
+            except Exception:
+                DB.log_exc("promos.sale")
+    threading.Thread(target=run, daemon=True).start()
+    return {"queued": sum(len(v) for v in todo.values())}
+
+
+@app.post("/api/promos/act")
+async def promos_act(request: Request):
+    u = need_user(request)
+    b = await request.json()
+    if b.get("action") not in ("pause", "resume", "end"):
+        raise HTTPException(400, "Unknown action.")
+    PM.act(DB.db, int(b["account_id"]), str(b["promotion_id"]), b["action"], u["email"])
     return {"ok": True}
 
 

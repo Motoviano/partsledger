@@ -21,6 +21,7 @@
       <button data-page="traffic"><svg viewBox="0 0 24 24"><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span>Traffic</span></button>
       <button data-page="ads"><svg viewBox="0 0 24 24"><path d="M3 11v2a1 1 0 001 1h2l5 4V6L6 10H4a1 1 0 00-1 1z"/><path d="M15 9a4 4 0 010 6M18 6a8 8 0 010 12"/></svg><span>Ads</span></button>
       <button data-page="offers"><svg viewBox="0 0 24 24"><path d="M20.6 13.4l-7.2 7.2a2 2 0 01-2.8 0L3 13V3h10l7.6 7.6a2 2 0 010 2.8z"/><path d="M8 8h.01"/><path d="M9 15l6-6"/></svg><span>Offers</span></button>
+      <button data-page="promos"><svg viewBox="0 0 24 24"><path d="M19 5L5 19"/><circle cx="7" cy="7" r="2.5"/><circle cx="17" cy="17" r="2.5"/></svg><span>Discounts</span></button>
       <button data-page="edit"><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg><span>Bulk edit</span></button>
       <button data-page="stock"><svg viewBox="0 0 24 24"><path d="M3 8l9-5 9 5v8l-9 5-9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg><span>Stock sync</span></button>
       <button data-page="payouts"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 9.5v5M18 9.5v5"/></svg><span>Payouts</span></button>
@@ -186,6 +187,49 @@
         <div class="panel-head"><div><h2>Offers sent</h2><p>"Sold" counts sales of that listing from the day the offer went out until it ran out (2 days, plus a day for late orders). A sale at the offer price is counted as from the offer; other sales in that time are shown separately.</p></div>
           <select id="ofWin" aria-label="Period"><option value="30">Last 30 days</option><option value="90" selected>Last 90 days</option><option value="365">Last year</option></select></div>
         <div class="tbl-wrap"><table id="ofLog"></table></div>
+      </div>
+    </section>
+
+    <section id="p-promos" data-p hidden>
+      <div class="panel">
+        <div class="panel-head"><div><h2>Your discounts on eBay</h2><p id="pmSub"></p></div>
+          <button class="btn" type="button" id="pmRefresh">Refresh from eBay</button></div>
+        <div class="tbl-wrap"><table id="pmTable"></table></div>
+      </div>
+      <div class="panel" style="margin-top:14px">
+        <div class="panel-head"><div><h2>Multi-buy, kept up to date</h2><p id="pmMbSub">Buyers get money off when they buy more than one of the same listing. The app only includes listings that still leave your minimum profit at the deepest discount, and once a day adds new listings that qualify and takes out ones that stop qualifying.</p></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><span id="pmMbState"></span></div></div>
+        <div class="form-row">
+          <div class="f"><label for="pmT2">Buy 2: % off</label><input type="number" id="pmT2" step="1" min="5" max="79" style="width:80px"></div>
+          <div class="f"><label for="pmT3">Buy 3 or more: % off</label><input type="number" id="pmT3" step="1" min="6" max="80" style="width:80px"></div>
+          <div class="f"><label for="pmT4">Buy 4 or more: % off (optional)</label><input type="number" id="pmT4" step="1" min="7" max="80" style="width:80px" placeholder="–"></div>
+          <div class="f"><label for="pmMax">Only listings under £ (0 = any)</label><input type="number" id="pmMax" step="1" min="0" style="width:90px"></div>
+          <div class="f"><label for="pmMinP">Keep at least £ profit</label><input type="number" id="pmMinP" step="0.5" min="0" style="width:90px"></div>
+          <div class="f"><label for="pmExcl">Leave out SKUs starting with</label><input type="text" id="pmExcl" placeholder="e.g. GRLL, HIP" style="width:170px"></div>
+          <button class="btn" type="button" id="pmMbPreview">Preview</button>
+          <button class="btn primary" type="button" id="pmMbApply" disabled>Start multi-buy</button>
+          <button class="btn" type="button" id="pmMbStop" hidden>Stop app multi-buy</button>
+        </div>
+        <div id="pmMbResult"><p class="muted" style="padding:0 16px 12px">Click Preview first: it shows which listings go in, and then Start multi-buy can be clicked.</p></div>
+      </div>
+      <div class="panel" style="margin-top:14px">
+        <div class="panel-head"><div><h2>Sale</h2><p>A % off the price for chosen dates (up to 45 days), shown on eBay as a sale price. Only listings that still leave your minimum profit at the sale price are included. Uses the account filter at the top.</p></div></div>
+        <div class="form-row">
+          <div class="f"><label for="pmSName">Name</label><input type="text" id="pmSName" value="Autumn sale" style="width:160px"></div>
+          <div class="f"><label for="pmSPct">% off</label><input type="number" id="pmSPct" value="10" step="1" min="5" max="80" style="width:80px"></div>
+          <div class="f"><label for="pmSFrom">From</label><input type="date" id="pmSFrom"></div>
+          <div class="f"><label for="pmSTo">To</label><input type="date" id="pmSTo"></div>
+          <div class="f"><label for="pmSMax">Only listings under £ (0 = any)</label><input type="number" id="pmSMax" value="0" step="1" min="0" style="width:90px"></div>
+          <div class="f"><label for="pmSPre">SKU starts with</label><input type="text" id="pmSPre" style="width:110px" placeholder="any"></div>
+          <div class="f"><label for="pmSMinP">Keep at least £ profit</label><input type="number" id="pmSMinP" value="1" step="0.5" min="0" style="width:90px"></div>
+          <button class="btn" type="button" id="pmSPreview">Preview</button>
+          <button class="btn primary" type="button" id="pmSCreate" disabled>Create sale</button>
+        </div>
+        <div id="pmSResult"><p class="muted" style="padding:0 16px 12px">Click Preview first: it shows which listings go in, and then Create sale can be clicked.</p></div>
+      </div>
+      <div class="panel" style="margin-top:14px">
+        <div class="panel-head"><div><h2>Discount changes</h2></div></div>
+        <div class="tbl-wrap"><table id="pmLog"></table></div>
       </div>
     </section>
 

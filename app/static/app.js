@@ -1401,6 +1401,80 @@ $('ofAuto').onclick = async () => {
   try { await post('/api/offers/settings', { offer_auto: on }); toast(on ? 'Automatic offers are on' : 'Automatic offers are off'); renderOffers(); } catch (e) { toast(e.message); }
 };
 
+// ---------------------------------------------------------------- discounts
+let PMD = null, pmMbPrev = null, pmSPrev = null;
+const PM_TYPE = { VOLUME_DISCOUNT: 'Multi-buy', MARKDOWN_SALE: 'Sale', ORDER_DISCOUNT: 'Order discount', CODED_COUPON: 'Coupon code' };
+const PM_STATUS = { RUNNING: ['Running', 'k'], SCHEDULED: ['Scheduled', 'b'], PAUSED: ['Paused', 'ret'], DRAFT: ['Draft', ''], ENDED: ['Ended', ''] };
+async function renderPromos() {
+  try { PMD = await api('/api/promos'); } catch (e) { toast(e.message); return; }
+  const f = F(), r = PMD.rule;
+  $('pmSub').textContent = PMD.fetched ? `Read from eBay ${ago(PMD.fetched)}. Ended discounts aren't shown.` : 'Not read from eBay yet. Click Refresh from eBay.';
+  const rows = PMD.promotions.filter(p => f.a.has(AIDX[p.account_id]));
+  $('pmTable').innerHTML = rows.length ? `<thead><tr><th class="l">Account</th><th class="l">Discount</th><th class="l">Type</th><th class="l">Status</th><th class="l">From</th><th class="l">To</th><th class="l">Listings</th><th></th></tr></thead><tbody>${rows.map(p => { const [sn, sc] = PM_STATUS[p.status] || [p.status, '']; return `<tr>
+    <td class="l"><span class="dot" style="background:${accColor(p.account_id)}"></span>${esc(accName(p.account_id))}</td>
+    <td class="l prod">${esc(p.name || '')}${p.managed ? ' <span class="chip b">Partsledger</span>' : ''}</td><td class="l">${esc(PM_TYPE[p.type] || p.type)}</td>
+    <td class="l"><span class="chip ${sc}">${esc(sn)}</span></td><td class="l">${p.start ? nice(p.start.slice(0, 10)) : '–'}</td><td class="l">${p.end ? nice(p.end.slice(0, 10)) : '–'}</td>
+    <td class="l">${p.listings != null ? n0(p.listings) : esc(p.scope || '–')}</td>
+    <td>${p.status === 'RUNNING' ? `<button class="link" type="button" data-pm="pause" data-a="${p.account_id}" data-p="${esc(p.promotion_id)}">Pause</button> ` : ''}${p.status === 'PAUSED' ? `<button class="link" type="button" data-pm="resume" data-a="${p.account_id}" data-p="${esc(p.promotion_id)}">Resume</button> ` : ''}<button class="link danger" type="button" data-pm="end" data-a="${p.account_id}" data-p="${esc(p.promotion_id)}">End</button></td></tr>`; }).join('')}</tbody>`
+    : '<tbody><tr><td class="empty">No running or scheduled discounts.</td></tr></tbody>';
+  $('pmTable').querySelectorAll('[data-pm]').forEach(b => b.onclick = async () => {
+    if (b.dataset.pm === 'end' && b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = 'Click again to end it'; return; }
+    try { await post('/api/promos/act', { account_id: +b.dataset.a, promotion_id: b.dataset.p, action: b.dataset.pm }); toast('Done'); renderPromos(); } catch (e) { toast(e.message); }
+  });
+  if (document.activeElement.closest && !document.activeElement.closest('#p-promos .form-row')) {
+    $('pmT2').value = r.tiers[0]; $('pmT3').value = r.tiers[1]; $('pmT4').value = r.tiers[2] ?? ''; $('pmMax').value = r.max_price; $('pmMinP').value = r.min_profit; $('pmExcl').value = r.exclude_prefixes || '';
+  }
+  $('pmMbState').innerHTML = r.enabled ? '<span class="chip k">On: kept up to date daily</span>' : '<span class="chip">Off</span>';
+  $('pmMbApply').textContent = r.enabled ? 'Update multi-buy now' : 'Start multi-buy'; $('pmMbStop').hidden = !r.enabled;
+  if (!$('pmSFrom').value) { $('pmSFrom').value = TODAY; $('pmSTo').value = addD(TODAY, 14); }
+  $('pmLog').innerHTML = PMD.log.length ? `<thead><tr><th class="l">When (UTC)</th><th class="l">Account</th><th class="l">What</th><th class="l">Result</th></tr></thead><tbody>${PMD.log.map(l => `<tr><td class="l">${esc((l.at || '').slice(0, 16))}${l.by ? `<span class="sub">${esc(l.by.split('@')[0])}</span>` : ''}</td><td class="l">${esc(l.account || '')}</td><td class="l">${esc(l.action)}</td>
+    <td class="l prod">${l.status === 'ok' ? '<span class="chip k">Done</span> ' : '<span class="chip m">Failed</span> '}${esc(l.message || '')}</td></tr>`).join('')}</tbody>` : '<tbody><tr><td class="empty">Nothing yet.</td></tr></tbody>';
+}
+function pmResult(el, prev, label) {
+  const f = F(), accs = Object.entries(prev).filter(([a]) => f.a.has(AIDX[a]));
+  const tin = accs.reduce((t, [, v]) => t + v.in.length, 0), tout = accs.reduce((t, [, v]) => t + v.out.length, 0);
+  const out = accs.flatMap(([a, v]) => v.out.map(x => ({ a: +a, x })));
+  el.innerHTML = `<div class="form-row" style="padding-top:0"><b>${n0(tin)} listings ${label}</b><span class="muted">${accs.map(([a, v]) => `${esc(accName(+a))}: ${n0(v.in.length)} in, ${n0(v.out.length)} left out`).join(' · ')}</span>
+    ${out.length ? `<button class="link" type="button" data-pmshow>Show the ${n0(out.length)} left out</button>` : ''}</div>
+    <div class="tbl-wrap" data-pmout hidden><table><thead><tr><th class="l">Account</th><th class="l">Listing</th><th>Price</th><th class="l">Why left out</th></tr></thead><tbody>${out.slice(0, 1000).map(({ a, x }) => `<tr>
+      <td class="l">${esc(accName(a))}</td><td class="l prod"><span class="t">${esc(x[2] || '')}</span><span class="s">${esc(x[1] || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(x[0])}" target="_blank" rel="noopener">${esc(x[0])}</a></span></td><td>${gbp(x[3])}</td><td class="l prod"><span class="muted">${esc(x[4])}</span></td></tr>`).join('')}</tbody></table></div>`;
+  const s = el.querySelector('[data-pmshow]'); if (s) s.onclick = () => { const t = el.querySelector('[data-pmout]'); t.hidden = !t.hidden; };
+  return tin;
+}
+function pmTiers() { return [$('pmT2').value, $('pmT3').value, $('pmT4').value].filter(v => v !== '').map(Number); }
+$('pmMbPreview').onclick = async () => {
+  const b = $('pmMbPreview'); b.disabled = true; b.textContent = 'Working out…';
+  try { pmMbPrev = await post('/api/promos/preview', { kind: 'multibuy', tiers: pmTiers(), max_price: +$('pmMax').value || 0, min_profit: +$('pmMinP').value || 0, exclude_prefixes: $('pmExcl').value });
+    const n = pmResult($('pmMbResult'), pmMbPrev, `qualify for: ${pmTiers().map((t, i) => `buy ${i + 2}${i === pmTiers().length - 1 ? '+' : ''} ${t}% off`).join(', ')}`); $('pmMbApply').disabled = !n; renderPromos();
+  } catch (e) { toast(e.message); }
+  b.disabled = false; b.textContent = 'Preview';
+};
+$('pmMbApply').onclick = async () => {
+  const b = $('pmMbApply'); if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = 'Click again to send it to eBay'; setTimeout(() => { b.dataset.sure = ''; renderPromos(); }, 6000); return; }
+  b.dataset.sure = '';
+  try { await post('/api/promos/multibuy', { enabled: true }); toast('Setting up the multi-buy on eBay… this takes a minute'); setTimeout(renderPromos, 20000); } catch (e) { toast(e.message); }
+};
+$('pmMbStop').onclick = async () => {
+  const b = $('pmMbStop'); if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = 'Click again to end the app multi-buy'; return; }
+  b.dataset.sure = '';
+  try { await post('/api/promos/multibuy', { enabled: false }); toast('Ending the app multi-buy…'); setTimeout(renderPromos, 8000); } catch (e) { toast(e.message); }
+};
+$('pmSPreview').onclick = async () => {
+  const b = $('pmSPreview'); b.disabled = true; b.textContent = 'Working out…';
+  try { pmSPrev = await post('/api/promos/preview', { kind: 'sale', pct: +$('pmSPct').value, max_price: +$('pmSMax').value || 0, prefix: $('pmSPre').value.trim(), min_profit: +$('pmSMinP').value || 0 });
+    const n = pmResult($('pmSResult'), pmSPrev, `can be ${$('pmSPct').value}% off from ${nice($('pmSFrom').value)} to ${nice($('pmSTo').value)}`); $('pmSCreate').disabled = !n;
+  } catch (e) { toast(e.message); }
+  b.disabled = false; b.textContent = 'Preview';
+};
+$('pmSCreate').onclick = async () => {
+  const b = $('pmSCreate'); if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = 'Click again to create the sale'; setTimeout(() => { b.dataset.sure = ''; b.textContent = 'Create sale'; }, 6000); return; }
+  b.dataset.sure = ''; b.textContent = 'Create sale';
+  const f = F();
+  try { const r = await post('/api/promos/sale', { name: $('pmSName').value, pct: +$('pmSPct').value, start: $('pmSFrom').value + 'T00:00:00', end: $('pmSTo').value + 'T23:59:00', max_price: +$('pmSMax').value || 0, prefix: $('pmSPre').value.trim(), min_profit: +$('pmSMinP').value || 0, accounts: ACC.filter(a => f.a.has(a.i)).map(a => a.id) });
+    toast(`Creating the sale for ${r.queued} listings…`); $('pmSCreate').disabled = true; setTimeout(renderPromos, 10000); } catch (e) { toast(e.message); }
+};
+$('pmRefresh').onclick = async () => { const b = $('pmRefresh'); b.disabled = true; try { await api('/api/promos/refresh', { method: 'POST' }); await renderPromos(); } catch (e) { toast(e.message); } b.disabled = false; };
+
 // ---------------------------------------------------------------- eBay
 let EBS = null, cpRows = [], jobTimer = null;
 async function renderEbay() {
@@ -1513,7 +1587,7 @@ $('adFile').onchange = async e => {
 };
 
 // ---------------------------------------------------------------- wiring
-const titles = { dash: 'Dashboard', orders: 'Sold items', traffic: 'Traffic', edit: 'Bulk edit', stock: 'Stock sync', msgs: 'Messages', ads: 'Ads', returns: 'Returns', payouts: 'Payouts', offers: 'Offers', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
+const titles = { dash: 'Dashboard', orders: 'Sold items', traffic: 'Traffic', edit: 'Bulk edit', stock: 'Stock sync', msgs: 'Messages', ads: 'Ads', returns: 'Returns', payouts: 'Payouts', offers: 'Offers', promos: 'Discounts', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
 let page = 'dash';
 function show(p) {
   page = p; document.querySelectorAll('[data-p]').forEach(s => s.hidden = s.id !== 'p-' + p);
@@ -1536,6 +1610,7 @@ function renderAll() {
   if (page === 'returns') renderReturns();
   if (page === 'payouts') renderPayouts();
   if (page === 'offers') renderOffers();
+  if (page === 'promos') renderPromos();
   if (page === 'cogs') { renderBands(); renderCogs(); }
   if (page === 'charts') renderCharts();
   if (page === 'uploads') renderUploads();
