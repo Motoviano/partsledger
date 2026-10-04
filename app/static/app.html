@@ -17,6 +17,7 @@
       <button data-page="dash"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="8" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="15" width="7" height="6" rx="1"/></svg><span>Dashboard</span></button>
       <button data-page="orders"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Sold items</span></button>
       <button data-page="msgs"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4z"/></svg><span>Messages</span><em class="badge" id="msgBadge" hidden></em></button>
+      <button data-page="standards"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg><span>Seller standards</span><em class="badge" id="ssBadge" hidden></em></button>
       <button data-page="returns"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 010 10h-3"/></svg><span>Returns</span></button>
       <button data-page="traffic"><svg viewBox="0 0 24 24"><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span>Traffic</span></button>
       <button data-page="ads"><svg viewBox="0 0 24 24"><path d="M3 11v2a1 1 0 001 1h2l5 4V6L6 10H4a1 1 0 00-1 1z"/><path d="M15 9a4 4 0 010 6M18 6a8 8 0 010 12"/></svg><span>Ads</span></button>
@@ -202,6 +203,15 @@
         </div>
         <div class="tbl-wrap"><table id="ftTable"></table></div>
       </div>
+    </section>
+
+    <section id="p-standards" data-p hidden>
+      <div class="panel">
+        <div class="panel-head"><div><h2>Seller standards</h2><p>Each account's seller level from eBay, now and as projected for the next monthly evaluation, with the metrics behind it, and how often buyers report "not as described" or "not received" compared with similar sellers. Read from eBay twice a day.</p><p class="muted" id="ssStatus" style="margin:6px 0 0"></p></div>
+          <button class="btn" type="button" id="ssRefresh">Refresh from eBay</button></div>
+        <div id="ssWarn"></div>
+      </div>
+      <div id="ssAccounts"></div>
     </section>
 
     <section id="p-offers" data-p hidden>

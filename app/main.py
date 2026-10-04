@@ -27,6 +27,7 @@ from . import offers as OF
 from . import promos as PM
 from . import compete as CP
 from . import fitment as FT
+from . import standards as SS
 from .auth import check_pw, ensure_admin, hash_pw
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -54,6 +55,7 @@ def startup():
         con.executescript(PM.SCHEMA)
         con.executescript(CP.SCHEMA)
         con.executescript(FT.SCHEMA)
+        con.executescript(SS.SCHEMA)
         con.execute("UPDATE title_jobs SET status='stopped' WHERE status IN ('queued','running')")
         AP.migrate(con)
         con.execute("UPDATE ad_changes SET status='failed', message='Stopped by a restart; try again' WHERE status='waiting'")
@@ -72,6 +74,7 @@ def startup():
         OF.start_scheduler(DB.db)
         PM.start_scheduler(DB.db)
         CP.start_scheduler(DB.db)
+        SS.start_scheduler(DB.db)
 
 
 def uk_today():
@@ -177,10 +180,11 @@ def data(request: Request):
             "SELECT u.*, a.name AS account FROM uploads u LEFT JOIN accounts a ON a.id=u.account_id ORDER BY u.id DESC LIMIT 200")]
         last = con.execute("SELECT MAX(date) FROM transactions").fetchone()[0]
         msg_open = con.execute("SELECT COUNT(*) FROM messages WHERE status!='Answered' AND done=0").fetchone()[0]
+        std_warn = SS.warning_count(con)
     return {"me": u, "asOf": last or uk_today(), "today": uk_today(),
             "accounts": [{"id": a["id"], "name": a["name"], "channel": a["channel"], "color": a["color"],
                           "hasData": any(i[1] == a["id"] for i in items)} for a in accounts],
-            "items": items, "overheads": overheads, "cogs": cogs, "settings": settings, "uploads": ups, "msgOpen": msg_open}
+            "items": items, "overheads": overheads, "cogs": cogs, "settings": settings, "uploads": ups, "msgOpen": msg_open, "stdWarn": std_warn}
 
 
 @app.post("/api/cogs")
@@ -963,6 +967,21 @@ async def fitment_copy(request: Request):
         jid = ED.create_job(con, u["email"], "fitment", f"Copy fitment: {len(changes)} listings", changes)
     ED.start(DB.db, jid)
     return {"job": jid, "changed": len(changes)}
+
+
+# ------------------------------------------------------------------ seller standards
+@app.get("/api/standards")
+def standards(request: Request):
+    need_user(request)
+    with DB.db() as con:
+        return {"accounts": SS.page(con)}
+
+
+@app.post("/api/standards/check")
+def standards_check(request: Request):
+    need_user(request)
+    SS.check(DB.db)
+    return {"ok": True}
 
 
 # ------------------------------------------------------------------ offers to interested buyers

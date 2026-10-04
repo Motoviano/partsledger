@@ -1744,8 +1744,69 @@ $('ftCopy').onclick = async () => {
   try { const r = await post('/api/fitment/copy', { items: ch.map(x => ({ account_id: x.account_id, item_id: x.item_id })) }); toast(`Copying fitment to ${n0(r.changed)} listings. Follow it or undo it on Bulk edit → Recent edits.`); ftOff = new Set(); setTimeout(renderFitment, 6000); } catch (e) { toast(e.message); }
 };
 
+// ---------------------------------------------------------------- seller standards
+let SSD = null;
+const SSL = { TOP_RATED: ['Top Rated', 'k'], ABOVE_STANDARD: ['Above standard', 'b'], BELOW_STANDARD: ['Below standard', 'm'] };
+const SSR = { LOW: ['Low', 'k'], AVERAGE: ['Average', 'b'], MEDIUM: ['Average', 'b'], HIGH: ['High', 'ret'], VERY_HIGH: ['Very high', 'm'] };
+const ssChip = (l, map = SSL) => l ? `<span class="chip ${(map[l] || [0, 'b'])[1]}">${esc((map[l] || [l.replace(/_/g, ' ').toLowerCase()])[0])}</span>` : '<span class="muted">–</span>';
+const ssIsRate = m => /RATE|PERCENT/i.test((m.key || '') + ' ' + (m.type || ''));
+const ssVal = m => m == null || m.value == null ? '–' : m.na ? '<span class="muted">not counted</span>' : ssIsRate(m) ? `${(+m.value).toFixed(2)}%` : n0(m.value);
+async function renderStandards() {
+  try { SSD = await api('/api/standards'); } catch (e) { toast(e.message); return; }
+  const f = F(), accs = SSD.accounts.filter(a => AIDX[a.account_id] !== undefined && f.a.has(AIDX[a.account_id]));
+  const last = accs.map(a => a.state && a.state.last_check).filter(Boolean).sort().pop();
+  $('ssStatus').textContent = last ? `Read from eBay ${ago(last)}.` : 'Not read from eBay yet: click Refresh from eBay.';
+  const warns = accs.flatMap(a => a.warn.map(w => `<li><b>${esc(a.name)}:</b> ${esc(w)}</li>`));
+  $('ssWarn').innerHTML = warns.length ? `<div style="margin:0 16px 14px;padding:10px 14px;border-radius:8px;background:var(--warn-soft);color:var(--warn)"><b>Needs attention</b><ul style="margin:6px 0 0;padding-left:18px">${warns.join('')}</ul></div>`
+    : accs.some(a => a.profiles.length) ? '<p style="margin:0 16px 14px"><span class="chip k">All good</span> <span class="muted">No account is heading down a level and no service rate is high.</span></p>' : '';
+  $('ssAccounts').innerHTML = accs.map(ssAccount).join('') || '<div class="panel" style="margin-top:14px"><p class="empty">No eBay accounts connected.</p></div>';
+}
+function ssAccount(a) {
+  const st = a.state, head = `<div class="panel-head"><div><h2><span class="dot" style="background:${ACC[AIDX[a.account_id]].color}"></span> ${esc(a.name)}</h2>`;
+  if (!st) return `<div class="panel" style="margin-top:14px">${head}<p>Not read yet.</p></div></div></div>`;
+  if (st.last_status !== 'ok') return `<div class="panel" style="margin-top:14px">${head}<p class="${st.last_status === 'scope' ? '' : 'neg'}">${esc(st.last_message || '')}</p></div></div></div>`;
+  const progs = [...new Set(a.profiles.map(p => p.program))].sort((x, y) => (y === 'PROGRAM_UK') - (x === 'PROGRAM_UK'));
+  const opened = Object.entries(a.open || {}).map(([k, n]) => `${n0(n)} open ${k === 'return' ? 'return' : k === 'inquiry' ? 'not-received request' : k}${n === 1 ? '' : 's'}`).join(', ');
+  return `<div class="panel" style="margin-top:14px">${head}<p>${opened ? `${esc(opened)}: each one closed without your help can become a defect. <a href="#" onclick="show('returns');return false">Open Returns</a>` : 'No open returns or cases.'}</p></div></div>
+    ${progs.map(pg => ssProgram(a, pg)).join('')}${ssService(a)}</div>`;
+}
+function ssProgram(a, pg) {
+  const cur = a.profiles.find(p => p.program === pg && p.cycle === 'CURRENT'), prj = a.profiles.find(p => p.program === pg && p.cycle === 'PROJECTED');
+  const keys = [...new Map([...(cur ? cur.metrics : []), ...(prj ? prj.metrics : [])].map(m => [m.key, m])).values()];
+  const mOf = (p, k) => p ? p.metrics.find(m => m.key === k) : null;
+  const band = m => m && (m.lower != null || m.upper != null) ? (ssIsRate(m) ? [m.lower, m.upper].map(v => v == null ? '…' : (+v).toFixed(2) + '%') : [m.lower, m.upper].map(v => v == null ? '…' : n0(v))).join(' – ') : '';
+  const name = { PROGRAM_UK: 'eBay UK', PROGRAM_US: 'eBay US', PROGRAM_DE: 'eBay Germany', PROGRAM_GLOBAL: 'Global (all other sites)' }[pg] || pg;
+  return `<div style="padding:10px 16px 4px"><div style="display:flex;gap:16px;flex-wrap:wrap;align-items:baseline">
+      <h3 style="margin:0;font-size:15px">${esc(name)}</h3>
+      <span>Now: ${ssChip(cur && cur.level)}</span><span>Next evaluation${prj && prj.eval_month ? ' (' + esc(prj.eval_month) + ')' : ''}: ${ssChip(prj && prj.level)}</span>
+      <span class="muted">${cur && cur.eval_date ? 'evaluated ' + esc(nice(cur.eval_date)) : ''}</span></div></div>
+    ${!keys.length ? '<div style="height:8px"></div>' : `<div class="tbl-wrap"><table><thead><tr><th class="l">Metric</th><th>Now</th><th class="l"></th><th>Projected</th><th class="l"></th><th class="l">Range for that level</th><th class="l">Period</th></tr></thead><tbody>
+    ${keys.length ? keys.map(k => { const c = mOf(cur, k.key), p = mOf(prj, k.key), m = p || c; return `<tr><td class="l">${esc(k.name)}</td>
+      <td>${ssVal(c)}${c && c.den != null ? `<span class="sub">${n0(c.num || 0)} of ${n0(c.den)}</span>` : ''}</td><td class="l">${c && c.level ? ssChip(c.level) : ''}</td>
+      <td>${ssVal(p)}${p && p.den != null ? `<span class="sub">${n0(p.num || 0)} of ${n0(p.den)}</span>` : ''}</td><td class="l">${p && p.level ? ssChip(p.level) : ''}</td>
+      <td class="l muted">${esc(band(m))}</td><td class="l muted">${m && m.from ? esc(nice(m.from)) + ' – ' + esc(nice(m.to)) : ''}</td></tr>`; }).join('') : ''}
+    </tbody></table></div>`}`;
+}
+function ssService(a) {
+  const kinds = [['ITEM_NOT_AS_DESCRIBED', 'Not as described'], ['ITEM_NOT_RECEIVED', 'Not received']];
+  const rows = kinds.flatMap(([k, label]) => ['CURRENT', 'PROJECTED'].map(c => [k, label, c, a.service.find(s => s.kind === k && s.cycle === c)]));
+  return `<div style="padding:14px 16px 4px"><h3 style="margin:0;font-size:15px">Compared with similar sellers</h3><p class="muted" style="margin:4px 0 0">eBay compares your rate with sellers of similar items. "Very high" can lead to selling limits.</p></div>
+    <div class="tbl-wrap"><table><thead><tr><th class="l">Problem</th><th class="l">Period</th><th class="l">Where</th><th>Your rate</th><th>Similar sellers</th><th>Cases</th><th>Sales</th><th class="l">Rating</th></tr></thead><tbody>
+    ${rows.map(([k, label, c, s]) => !s ? '' : s.dims == null ? `<tr><td class="l">${label}</td><td class="l">${c === 'CURRENT' ? 'Now' : 'Projected'}</td><td class="l muted" colspan="6">${esc(s.error || 'Not enough sales to rate yet')}</td></tr>`
+      : !s.dims.length ? `<tr><td class="l">${label}</td><td class="l">${c === 'CURRENT' ? 'Now' : 'Projected'}</td><td class="l muted" colspan="6">Nothing to rate in this period</td></tr>`
+      : s.dims.map((d, i) => `<tr><td class="l">${i ? '' : label}</td><td class="l">${i ? '' : (c === 'CURRENT' ? 'Now' : 'Projected') + (s.start ? `<span class="sub">${esc(nice(s.start))} – ${esc(nice(s.end))}</span>` : '')}</td>
+        <td class="l">${esc(d.name || d.value || '')}</td><td>${d.rate != null ? (+d.rate).toFixed(2) + '%' : '–'}</td><td>${d.avg != null ? (+d.avg).toFixed(2) + '%' : '–'}</td>
+        <td>${d.count != null ? n0(d.count) : '–'}</td><td>${d.txns != null ? n0(d.txns) : '–'}</td><td class="l">${ssChip(d.rating, SSR)}${d.adjustment ? `<span class="sub">${esc(d.adjustment)}</span>` : ''}</td></tr>`).join('')).join('')}
+    </tbody></table></div>`;
+}
+$('ssRefresh').onclick = async () => {
+  const b = $('ssRefresh'); b.disabled = true; b.textContent = 'Reading from eBay…';
+  try { await api('/api/standards/check', { method: 'POST' }); await renderStandards(); toast('Updated'); } catch (e) { toast(e.message); }
+  b.disabled = false; b.textContent = 'Refresh from eBay';
+};
+
 // ---------------------------------------------------------------- wiring
-const titles = { dash: 'Dashboard', orders: 'Sold items', traffic: 'Traffic', edit: 'Bulk edit', stock: 'Stock sync', msgs: 'Messages', ads: 'Ads', returns: 'Returns', payouts: 'Payouts', offers: 'Offers', promos: 'Discounts', compete: 'Competitors', fitment: 'Fitment', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
+const titles = { dash: 'Dashboard', orders: 'Sold items', traffic: 'Traffic', edit: 'Bulk edit', stock: 'Stock sync', msgs: 'Messages', ads: 'Ads', returns: 'Returns', payouts: 'Payouts', offers: 'Offers', promos: 'Discounts', compete: 'Competitors', fitment: 'Fitment', standards: 'Seller standards', cogs: 'COGS', charts: 'Charts', uploads: 'Uploads', ebay: 'eBay', users: 'Users' };
 let page = 'dash';
 function show(p) {
   page = p; document.querySelectorAll('[data-p]').forEach(s => s.hidden = s.id !== 'p-' + p);
@@ -1771,6 +1832,7 @@ function renderAll() {
   if (page === 'promos') renderPromos();
   if (page === 'compete') renderCompete();
   if (page === 'fitment') renderFitment();
+  if (page === 'standards') renderStandards();
   if (page === 'cogs') { renderBands(); renderCogs(); }
   if (page === 'charts') renderCharts();
   if (page === 'uploads') renderUploads();
@@ -1798,6 +1860,7 @@ async function load() {
   $('upAcc').innerHTML = '<option value="">Work it out from the file</option>' + ACC.filter(a => a.channel === 'ebay').map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
   $('whoami').textContent = `${ME.name} (${ME.email})`;
   $('msgBadge').textContent = D.msgOpen || ''; $('msgBadge').hidden = !D.msgOpen;
+  $('ssBadge').textContent = D.stdWarn ? '!' : ''; $('ssBadge').hidden = !D.stdWarn; $('ssBadge').title = D.stdWarn ? 'Seller standards need attention' : '';
   $('sideFoot').innerHTML = `<strong>Motoviano Ltd</strong>${ACC.map(a => esc(a.name) + (a.hasData ? '' : ' (no data yet)')).join('<br>')}<br>${I.length ? 'Data up to ' + nice(D.asOf) : 'No data yet'}`;
   if (!$('cFrom').value) $('cFrom').value = TODAY;
   if (!$('fFrom').value) { $('fFrom').value = D.minDate; $('fTo').value = D.asOf; }
