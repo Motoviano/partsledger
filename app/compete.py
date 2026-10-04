@@ -259,7 +259,7 @@ def summarise(con, s=None):
             l = con.execute("SELECT sku,title,price,qty,sold FROM listings WHERE account_id=? AND item_id=?", (a, item)).fetchone()
             sku = sku_map.get(item) or l["sku"] or ""
             q, r = qs.get((a, item)), res.get((a, item))
-            row = {"account_id": a, "item_id": item, "sku": sku, "title": l["title"], "price": l["price"], "qty": l["qty"], "sold": l["sold"],
+            row = {"account_id": a, "item_id": item, "sku": sku, "group": OF.PR.group_of(sku), "title": l["title"], "price": l["price"], "qty": l["qty"], "sold": l["sold"],
                    "checked": r["checked_at"] if r else None, "status": r["status"] if r else None, "message": r["message"] if r else None,
                    "query": q["query"] if q else None, "kind": q["kind"] if q else None, "post": q["our_post"] if q else None}
             if r and r["status"] == "ok":

@@ -140,10 +140,19 @@ function renderTiles() {
       T.oh = Math.min(T.oh, lm.oh); T.net = T.gross + T.oh;
       sub += ' · pace from last 14 days and last month';
     } else T = totals(itemsIn(f, td.r), ohIn(f, td.r));
-    const d = (k === 'fc' || k === 'mtd') && lm.sales ? (T.sales - lm.sales) / Math.abs(lm.sales) : null;
+    // Sales change: month to date against the same days of last month (1st to the same day number);
+    // the forecast against the whole of last month. No % when the comparison period had no sales.
+    let cmp = null, cmpR = null;
+    if (k === 'mtd') { const n = +TODAY.slice(8, 10) - 1, e = addD(lmR[0], n); cmpR = [lmR[0], e > lmR[1] ? lmR[1] : e]; cmp = totals(itemsIn(f, cmpR), []); }
+    else if (k === 'fc') { cmpR = lmR; cmp = lm; }
+    const d = cmp && cmp.sales > 0 ? (T.sales - cmp.sales) / cmp.sales : null;
+    const dTip = d != null ? `Compared with ${cmpR[0] === cmpR[1] ? nice(cmpR[0]) : nice(cmpR[0]) + ' – ' + nice(cmpR[1])}: ${gbp(cmp.sales)}` : '';
+    // what eBay pays out for these sales: sales less the fees, ads, postage labels and refunds eBay takes before paying
+    const payout = T.sales + T.fee + T.ad + T.po + T.rf + T.oh;
     return `<article class="tile ${activeTile === k ? 'active' : ''}" style="--hd:var(${TILE_COLORS[i % 5]})" data-tile="${k}" tabindex="0" role="button" aria-label="Show ${td.name} in the product table">
       <header><b>${td.name}</b><span>${sub}</span></header><div class="body">
-      <div class="kv big"><small>Sales${d != null ? ` <span class="delta ${d < 0 ? 'neg' : 'pos'}">${d >= 0 ? '+' : ''}${(d * 100).toFixed(1)}%</span>` : ''}</small><b>${gbp(T.sales)}</b></div>
+      <div class="kv big"><small>Sales${d != null ? ` <span class="delta ${d < 0 ? 'neg' : 'pos'}" title="${esc(dTip)}">${d >= 0 ? '+' : ''}${(d * 100).toFixed(1)}%</span>` : ''}</small><b>${gbp(T.sales)}</b>${d != null ? `<span class="cmp">vs ${esc(k === 'mtd' ? 'same days last month' : 'last month')}</span>` : ''}</div>
+      <div class="kv payout" title="Sales less eBay fees, ads, postage labels, refunds and other eBay fees: roughly what eBay pays into the bank for these sales"><small>Payout${k === 'fc' ? ' (estimate)' : ' (approx.)'}</small><b class="${cls(payout)}">${gbp(payout)}</b></div>
       <div class="kv"><small>Orders / units</small><b>${n0(T.orders)} / ${n0(T.units)}</b></div>
       <div class="kv"><small>Returns</small><b>${n0(T.ret)}</b></div>
       <div class="kv"><small>eBay fees</small><b class="${cls(T.fee)}">${gbp(T.fee)}</b></div>
@@ -1642,11 +1651,17 @@ async function renderCompete() {
   drawCompete();
   clearTimeout(cpPoll); if (pr.running && page === 'compete') cpPoll = setTimeout(renderCompete, 4000);
 }
+// the account and product-group filters at the top, SKU start, search and "which listings" choose what is shown and what Check searches for
 function cmRows() {
-  const f = F(), q = $('cpSearch').value.trim().toLowerCase(), v = $('cpView').value;
-  return (CPD ? CPD.rows : []).map(r => ({ ...r, a: AIDX[r.account_id], k: r.account_id + '|' + r.item_id })).filter(r => r.a !== undefined && f.a.has(r.a)
+  const f = F(), q = $('cpSearch').value.trim().toLowerCase(), pre = $('cpPrefix').value.trim().toLowerCase(), v = $('cpView').value, w = $('cpWhich').value;
+  let rows = (CPD ? CPD.rows : []).map(r => ({ ...r, a: AIDX[r.account_id], k: r.account_id + '|' + r.item_id })).filter(r => r.a !== undefined && f.a.has(r.a)
+    && (f.allG || f.g.has(r.group))
+    && (!pre || pre.split(/[\s,]+/).filter(Boolean).some(p => (r.sku || '').toLowerCase().startsWith(p)))
     && (!q || (r.sku || '').toLowerCase().includes(q) || (r.title || '').toLowerCase().includes(q))
+    && (w !== 'stock' || r.qty > 0) && (w !== 'sold' || (r.sold || 0) > 0)
     && (v === 'all' || (v === 'unchecked' ? !r.checked : r.state === v)));
+  if (w === 'top') rows = rows.filter(r => (r.sold || 0) > 0).sort((x, y) => (y.sold || 0) - (x.sold || 0)).slice(0, 50);
+  return rows;
 }
 function drawCompete() {
   if (!CPD) return;
@@ -1668,13 +1683,13 @@ function drawCompete() {
     { h: 'Notes', l: 1, cl: 'prod', v: r => r.state || '', f: r => (r.state && CPS[r.state] ? `<span class="chip ${CPS[r.state][1]}">${CPS[r.state][0]}</span> ` : '') + `<span class="muted">${esc(r.why || (r.status === 'error' ? r.message : '') || '')}</span>` + (r.checked ? `<span class="sub">checked ${ago(r.checked)}</span>` : '') }],
     cpState.sort ? rows : rows.sort((x, y) => (x.suggest == null) - (y.suggest == null) || !x.checked - !y.checked || (y.sold || 0) - (x.sold || 0)), null, cpState);
   const t = $('cpTable');
-  t.querySelectorAll('.cp-sel').forEach(b => b.onchange = () => { if (b.checked) { cpOff.delete(b.dataset.k); cpPick.add(b.dataset.k); } else { cpPick.delete(b.dataset.k); cpOff.add(b.dataset.k); } cpCount(); });
+  t.querySelectorAll('.cp-sel').forEach(b => b.onchange = () => { if (b.checked) { cpOff.delete(b.dataset.k); cpPick.add(b.dataset.k); } else { cpPick.delete(b.dataset.k); cpOff.add(b.dataset.k); } cmCount(); });
   t.querySelectorAll('.cp-open').forEach(a => a.onclick = e => { e.preventDefault(); cpOpen = cpOpen === a.dataset.k ? null : a.dataset.k; drawCompete(); });
   if (cpOpen) {
     const ri = (cpState.rows || []).findIndex(r => r.k === cpOpen), tr = t.querySelector(`tbody tr[data-ri="${ri}"]`);
     if (ri >= 0 && tr) tr.insertAdjacentHTML('afterend', `<tr class="cp-detail"><td colspan="9" class="l">${cpDetail(cpState.rows[ri])}</td></tr>`), cpWireDetail(cpState.rows[ri]);
   }
-  cpCount();
+  cmCount();
 }
 const ord = n => n + (n % 10 === 1 && n % 100 !== 11 ? 'st' : n % 10 === 2 && n % 100 !== 12 ? 'nd' : n % 10 === 3 && n % 100 !== 13 ? 'rd' : 'th');
 function cpDetail(r) {
@@ -1699,22 +1714,22 @@ function cpWireDetail(r) {
 // matches found by title alone aren't ticked until you've looked at them
 const cpTicked = r => cpPick.has(r.k) || (!cpOff.has(r.k) && r.kind !== 'title');
 function cpChosen() { return cmRows().filter(r => r.suggest != null && cpTicked(r)); }
-function cpCount() {
+function cmCount() {
   const n = cpChosen().length, m = Math.min(cmRows().length, 4500);
   $('cpSel').textContent = n ? `${n0(n)} price changes ticked` : '';
   $('cpApply').disabled = !n; $('cpApply').textContent = n ? `Change ${n0(n)} price${n === 1 ? '' : 's'}` : 'Change prices';
-  $('cpCheck').textContent = `Check ${n0(m)} listings`; $('cpCheck').disabled = !m || (CPD && CPD.progress.running);
+  $('cpCheck').textContent = m ? `Check these ${n0(m)} listing${m === 1 ? '' : 's'}` : 'Check listings'; $('cpCheck').disabled = !m || (CPD && CPD.progress.running);
 }
-['cpView', 'cpSearch'].forEach(id => $(id).addEventListener('input', () => { cpOpen = null; drawCompete(); }));
+['cpView', 'cpSearch', 'cpPrefix', 'cpWhich'].forEach(id => $(id).addEventListener('input', () => { cpOpen = null; drawCompete(); }));
 $('cpCheck').onclick = async () => {
   const b = $('cpCheck'), rs = cmRows(); if (!rs.length) return;
-  if (rs.length > 50 && b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = `Click again: ${n0(rs.length)} eBay searches`; setTimeout(() => { b.dataset.sure = ''; cpCount(); }, 6000); return; }
+  if (rs.length > 50 && b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = `Click again: ${n0(rs.length)} eBay searches`; setTimeout(() => { b.dataset.sure = ''; cmCount(); }, 6000); return; }
   b.dataset.sure = '';
   try { const r = await post('/api/compete/check', { items: rs.map(x => ({ account_id: x.account_id, item_id: x.item_id })) }); toast(`Checking ${n0(r.queued)} listings…` + (r.capped ? ' (the rest go over today\'s eBay limit)' : '')); setTimeout(renderCompete, 1500); } catch (e) { toast(e.message); }
 };
 $('cpApply').onclick = async () => {
   const b = $('cpApply'), ch = cpChosen(); if (!ch.length) return;
-  if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = `Click again to change ${n0(ch.length)} prices on eBay`; setTimeout(() => { b.dataset.sure = ''; cpCount(); }, 6000); return; }
+  if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = `Click again to change ${n0(ch.length)} prices on eBay`; setTimeout(() => { b.dataset.sure = ''; cmCount(); }, 6000); return; }
   b.dataset.sure = '';
   try { const r = await post('/api/compete/apply', { items: ch.map(x => ({ account_id: x.account_id, item_id: x.item_id })) }); toast(`Changing ${n0(r.changed)} prices. You can follow it and undo it on Bulk edit → Recent edits.`); cpOff = new Set(); cpPick = new Set(); setTimeout(renderCompete, 5000); } catch (e) { toast(e.message); }
 };

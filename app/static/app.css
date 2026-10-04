@@ -40,8 +40,10 @@ aside{background:var(--side);color:var(--side-ink);padding-block:18px;position:s
 .brand b{font-family:var(--display);font-size:26px;letter-spacing:.02em;font-weight:700}
 .brand b span{color:var(--accent)}
 .brand small{color:var(--side-muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
-nav{display:flex;flex-direction:column;gap:2px;padding-inline:10px}
-nav button{all:unset;cursor:pointer;display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:6px;color:var(--side-ink);font-weight:500}
+nav{display:flex;flex-direction:column;gap:1px;padding-inline:10px;overflow-y:auto;min-height:0;flex:1}
+.nav-h{font-size:10.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--side-muted);padding:12px 10px 4px}
+.nav-h:first-child{padding-top:0}
+nav button{all:unset;cursor:pointer;display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:6px;color:var(--side-ink);font-weight:500}
 nav button svg{width:17px;height:17px;flex:none;stroke:currentColor;fill:none;stroke-width:1.7}
 nav button:hover{background:var(--side-active)}
 nav button[aria-current="page"]{background:var(--side-active);box-shadow:inset 3px 0 0 var(--accent)}
@@ -142,6 +144,7 @@ tfoot td{font-weight:700;background:var(--surface2);border-top:2px solid var(--l
   nav{flex-direction:row;flex-wrap:wrap;padding:0}
   nav button{padding:7px 9px}
   nav button span{display:none}
+  .nav-h{display:none}
   .side-foot{display:none}
   main{padding-inline:16px}
   .tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -275,3 +278,6 @@ a.btn{text-decoration:none;display:inline-block}
 .kinds button{font:inherit;font-weight:600;cursor:pointer;border-radius:99px;padding:7px 14px;border:1px solid var(--line);background:var(--surface2);color:var(--ink)}
 .kinds button:hover{border-color:var(--accent)}
 .kinds button[aria-checked="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
+
+.tile .cmp{display:block;font-size:11px;color:var(--muted);font-weight:400;margin-top:1px}
+.tile .kv.payout b{font-weight:700}
