@@ -150,6 +150,7 @@ def migrate(con):
         if col not in {r[1] for r in con.execute(f"PRAGMA table_info({table})")}:
             con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
     add("ebay_tokens", "scopes", "TEXT")
+    add("listings", "img", "TEXT")
     add("sync_state", "last_traffic_sync", "TEXT")
     add("sync_state", "traffic_status", "TEXT")
     add("sync_state", "traffic_message", "TEXT")
@@ -699,6 +700,11 @@ def fetch_orders(token, start, end):
         offset += 200
 
 
+def _pic(it):
+    """The listing's main photo address (the gallery picture, else the first photo)."""
+    return it.findtext(f"{N}PictureDetails/{N}GalleryURL") or it.findtext(f"{N}PictureDetails/{N}PictureURL") or None
+
+
 def fetch_listings(token):
     out, page = [], 1
     while True:
@@ -718,7 +724,8 @@ def fetch_listings(token):
             qa = int(qa) if qa is not None else q - int(it.findtext(f"{N}SellingStatus/{N}QuantitySold") or 0)
             out.append({"item_id": it.findtext(N + "ItemID"), "sku": it.findtext(N + "SKU"), "title": it.findtext(N + "Title"),
                         "price": float(it.findtext(f"{N}SellingStatus/{N}CurrentPrice") or it.findtext(f"{N}BuyItNowPrice") or 0),
-                        "qty": max(qa, 0), "category": None, "sold": int(it.findtext(f"{N}SellingStatus/{N}QuantitySold") or 0)})
+                        "qty": max(qa, 0), "category": None, "sold": int(it.findtext(f"{N}SellingStatus/{N}QuantitySold") or 0),
+                        "img": _pic(it)})
         pages = int(al.findtext(f"{N}PaginationResult/{N}TotalNumberOfPages") or 1)
         if page >= pages:
             return out
@@ -748,7 +755,7 @@ def fetch_seller_list(token, days_ahead=119):
             sold = int(it.findtext(f"{N}SellingStatus/{N}QuantitySold") or 0)
             out.append({"item_id": it.findtext(N + "ItemID"), "sku": it.findtext(N + "SKU"), "title": it.findtext(N + "Title"),
                         "price": float(it.findtext(f"{N}SellingStatus/{N}CurrentPrice") or it.findtext(f"{N}StartPrice") or 0),
-                        "qty": max(q - sold, 0), "category": None, "sold": sold})
+                        "qty": max(q - sold, 0), "category": None, "sold": sold, "img": _pic(it)})
         pages = int(r.findtext(f"{N}PaginationResult/{N}TotalNumberOfPages") or 1)
         if page >= pages:
             return out

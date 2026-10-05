@@ -248,10 +248,11 @@ def store_transactions(con, account_id, rows, upload_id):
 def store_listings(con, account_id, rows):
     today = datetime.utcnow().strftime("%Y-%m-%d")
     for r in rows:
-        con.execute("""INSERT INTO listings(account_id,item_id,sku,title,price,qty,category,sold,updated_at) VALUES(?,?,?,?,?,?,?,?,?)
+        con.execute("""INSERT INTO listings(account_id,item_id,sku,title,price,qty,category,sold,updated_at,img) VALUES(?,?,?,?,?,?,?,?,?,?)
                        ON CONFLICT(account_id,item_id) DO UPDATE SET sku=excluded.sku,title=excluded.title,price=excluded.price,
-                       qty=excluded.qty,category=excluded.category,sold=excluded.sold,updated_at=excluded.updated_at""",
-                    (account_id, r["item_id"], r["sku"], r["title"], r["price"], r["qty"], r["category"], r["sold"], today))
+                       qty=excluded.qty,category=excluded.category,sold=excluded.sold,updated_at=excluded.updated_at,
+                       img=COALESCE(excluded.img, listings.img)""",
+                    (account_id, r["item_id"], r["sku"], r["title"], r["price"], r["qty"], r["category"], r["sold"], today, r.get("img")))
     return len(rows)
 
 

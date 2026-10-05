@@ -173,6 +173,19 @@ function renderTiles() {
     el.onclick = go; el.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
   });
 }
+// ---------------------------------------------------------------- small product photos
+// Loaded once after the main data (cached by the browser with an ETag). Each photo is a 64px version straight from
+// eBay's image servers, loaded lazily, so only the rows on screen fetch anything.
+let THM = { i: {}, s: {}, ready: false };
+const thUrl = (k, n) => k.startsWith('g:') ? `https://i.ebayimg.com/images/g/${k.slice(2)}/s-l${n}.jpg` : k.replace(/\/s-l\d+\./, `/s-l${n}.`).replace(/\$_\d+\.(jpe?g|png)/i, n > 100 ? '$_2.$1' : '$_14.$1');
+function TH(id, sku) {
+  const k = (id && THM.i[id]) || (sku && THM.s[String(sku).toUpperCase()]);
+  return k ? `<img class="th" src="${esc(thUrl(k, 64))}" srcset="${esc(thUrl(k, 140))} 2x" loading="lazy" decoding="async" width="40" height="40" alt="">` : THM.ready ? '<span class="th"></span>' : '';
+}
+async function loadThumbs() {
+  try { const t = await api('/api/thumbs'); THM = { i: t.i || {}, s: t.s || {}, ready: true }; renderAll(); } catch (e) { }
+}
+
 // ---------------------------------------------------------------- tables
 function table(el, cols, rows, foot, state) {
   const s = state.sort; if (s) { const c = cols[s.i]; rows.sort((a, b) => { const A = c.v(a), B = c.v(b); return (typeof A === 'string' ? A.localeCompare(B) : (A - B)) * (s.asc ? 1 : -1); }); }
@@ -201,7 +214,7 @@ function renderProducts() {
   const T = rows.reduce((a, r) => { ['u', 'ret', 's', 'ad', 'rf', 'fee', 'cogs', 'po', 'p'].forEach(k => a[k] += r[k]); return a; }, { u: 0, ret: 0, s: 0, ad: 0, rf: 0, fee: 0, cogs: 0, po: 0, p: 0 });
   $('prodSub').textContent = `${rows.length} products · ${nice(f.r[0])} – ${nice(f.r[1])}. Product profit before insertion fees and shop subscription.`;
   const cols = [
-    { h: 'Product', l: 1, cl: 'prod', v: r => r.sku, f: r => `<span class="t">${esc(r.t)}</span><span class="s">${esc(r.sku)}</span> ${srcChip(r.srcs.has('M') ? 'M' : r.srcs.has('P') ? 'P' : 'K')}` },
+    { h: 'Product', l: 1, cl: 'prod', v: r => r.sku, f: r => `${TH(null, r.sku)}<span class="t">${esc(r.t)}</span><span class="s">${esc(r.sku)}</span> ${srcChip(r.srcs.has('M') ? 'M' : r.srcs.has('P') ? 'P' : 'K')}` },
     { h: 'Units', v: r => r.u, f: r => n0(r.u) }, { h: 'Returns', v: r => r.ret, f: r => r.ret ? `<span class="chip ret">${r.ret}</span>` : '0' },
     { h: 'Sales', v: r => r.s, f: r => gbp(r.s) }, { h: 'Ads', v: r => r.ad, f: r => money(r.ad) }, { h: 'Refunds', v: r => r.rf, f: r => money(r.rf) },
     { h: 'eBay fees', v: r => r.fee, f: r => money(r.fee) }, { h: 'COGS', v: r => -r.cogs, f: r => money(-r.cogs) }, { h: 'Postage', v: r => r.po, f: r => money(r.po) },
@@ -222,7 +235,7 @@ function renderOrders() {
     { h: 'Date', l: 1, v: x => x.d, f: x => nice(x.d) },
     { h: 'Account', l: 1, v: x => ACC[x.a].name, f: x => `<span class="dot" style="background:${ACC[x.a].color}"></span>${esc(ACC[x.a].name)}` },
     { h: 'Order', l: 1, v: x => x.o, f: x => `<span class="sku">${esc(x.o)}</span>` },
-    { h: 'Product', l: 1, cl: 'prod', v: x => x.sku, f: x => `<span class="t">${esc(x.t)}</span><span class="s">${esc(x.sku.startsWith('No SKU') ? 'No SKU' : x.sku)}</span>` +
+    { h: 'Product', l: 1, cl: 'prod', v: x => x.sku, f: x => `${TH(x.id, x.sku)}<span class="t">${esc(x.t)}</span><span class="s">${esc(x.sku.startsWith('No SKU') ? 'No SKU' : x.sku)}</span>` +
         (x.id ? ` <button class="link" type="button" data-setsku="${esc(x.id)}">${x.sku.startsWith('No SKU') ? 'Set SKU' : 'Change SKU'}</button>` : '') },
     { h: 'Qty', v: x => x.q, f: x => x.q }, { h: 'Sale', v: x => x.s, f: x => gbp(x.s) }, { h: 'eBay fees', v: x => x.fee, f: x => money(x.fee) }, { h: 'Ads', v: x => x.ad, f: x => money(x.ad) },
     { h: 'Postage', v: x => x.po, f: x => money(x.po) }, { h: 'Refund', v: x => x.rf, f: x => x.rf ? money(x.rf) + (x.ret ? ' <span class="chip ret">Returned</span>' : '') : '–' },
@@ -456,7 +469,7 @@ async function renderTraffic() {
     (!q || r.sku.toLowerCase().includes(q) || r.t.toLowerCase().includes(q) || r.id.includes(q)));
   $('trSub').textContent = `${rows.length} listings · ${nice(f.r[0])} – ${nice(f.r[1])}. Flags: under ${pct(TR_LOW_CTR)} click-through after ${TR_MIN_IMPR}+ impressions, or ${TR_MIN_VIEWS}+ views with no sale.`;
   const cols = [
-    { h: 'Listing', l: 1, cl: 'prod', v: r => r.sku || r.t, f: r => `<span class="t">${esc(r.t)}</span><span class="s"><span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)} · ${esc(r.sku || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(r.id)}" target="_blank" rel="noopener">${esc(r.id)}</a></span>` },
+    { h: 'Listing', l: 1, cl: 'prod', v: r => r.sku || r.t, f: r => `${TH(r.id, r.sku)}<span class="t">${esc(r.t)}</span><span class="s"><span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)} · ${esc(r.sku || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(r.id)}" target="_blank" rel="noopener">${esc(r.id)}</a></span>` },
     { h: 'Price', v: r => r.price ?? -1, f: r => r.price != null ? gbp(r.price) : '–' },
     { h: 'Stock', v: r => r.qty ?? -1, f: r => r.active ? n0(r.qty) : '<span class="muted">ended</span>' },
     { h: 'Impressions', v: r => r.imp, f: r => n0(r.imp) },
@@ -579,7 +592,7 @@ function drawList() {
     { h: 'Listing', l: 1, cl: 'prod', v: r => r.t, f: r => { const ty = edTyped.get(edKey(r)) || {};
         const title = ty.title != null ? `<input class="title-in changed" data-k="${esc(edKey(r))}" data-f="title" value="${esc(ty.title)}" maxlength="120" aria-label="New title"><span class="tlen ${ty.title.length > 80 ? 'over' : ''}">${ty.title.length}/80</span>`
           : `<span class="t">${esc(r.t)}</span>`;
-        return `${title}<span class="s"><span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)} · ${esc(r.sku || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(r.id)}" target="_blank" rel="noopener">${esc(r.id)}</a>${ty.title == null ? ` · <button class="link" type="button" data-edtitle="${esc(edKey(r))}">Edit title</button>` : ''}</span>`; } },
+        return `${TH(r.id, r.sku)}${title}<span class="s"><span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)} · ${esc(r.sku || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(r.id)}" target="_blank" rel="noopener">${esc(r.id)}</a>${ty.title == null ? ` · <button class="link" type="button" data-edtitle="${esc(edKey(r))}">Edit title</button>` : ''}</span>`; } },
     { h: 'Price', v: r => r.price ?? 0, f: r => { const t = edTyped.get(edKey(r))?.price; return `<input type="number" class="cell-in ${t != null ? 'changed' : ''}" data-k="${esc(edKey(r))}" data-f="price" step="0.01" min="0.99" value="${t ?? r.price ?? ''}" aria-label="Price for ${esc(r.sku || r.id)}">`; } },
     { h: 'Stock', v: r => r.qty ?? 0, f: r => { const t = edTyped.get(edKey(r))?.qty; return `<input type="number" class="cell-in ${t != null ? 'changed' : ''}" style="width:70px" data-k="${esc(edKey(r))}" data-f="qty" step="1" min="0" value="${t ?? r.qty ?? ''}" aria-label="Stock for ${esc(r.sku || r.id)}">`; } },
     { h: 'Sold', v: r => r.sold, f: r => n0(r.sold) },
@@ -787,7 +800,7 @@ function edFmt(fld, v) { return fld === 'end' ? (v && v.reason ? '<span class="n
 function drawEdit() {
   const cols = [
     { h: `<input type="checkbox" id="edAll" aria-label="Select all" checked>`, l: 1, v: () => 0, f: r => `<input type="checkbox" class="ed-sel" data-k="${r.aid}|${esc(r.id)}|${r.fld}" ${r.ok ? 'checked' : 'disabled'} aria-label="Select ${esc(r.sku || r.id)}">` },
-    { h: 'Listing', l: 1, cl: 'prod', v: r => r.sku, f: r => `<span class="t">${esc(r.fld === 'title' ? r.cur : r.t)}</span><span class="s"><span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)} · ${esc(r.sku || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(r.id)}" target="_blank" rel="noopener">${esc(r.id)}</a></span>` },
+    { h: 'Listing', l: 1, cl: 'prod', v: r => r.sku, f: r => `${TH(r.id, r.sku)}<span class="t">${esc(r.fld === 'title' ? r.cur : r.t)}</span><span class="s"><span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)} · ${esc(r.sku || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(r.id)}" target="_blank" rel="noopener">${esc(r.id)}</a></span>` },
     { h: 'Change', l: 1, v: r => r.fld, f: r => FLD_NAME[r.fld] },
     { h: 'Now', l: 1, cl: 'prod', v: r => typeof r.cur === 'number' ? r.cur : String(r.cur ?? ''), f: r => r.fld === 'bestoffer' && r.bo ? esc(r.bo.on ? boText({ enabled: true, accept: r.bo.accept, decline: r.bo.decline }) : 'off') : r.fld === 'specific' || r.fld === 'bestoffer' ? '<span class="muted">read when applied</span>' : r.fld === 'title' ? `<span class="oldv">${esc(r.cur)}</span>` : edFmt(r.fld, r.cur) },
     { h: 'New', l: 1, cl: 'prod', v: r => typeof r.nv === 'number' ? r.nv : String(r.nv ?? ''), f: r => `<b>${edFmt(r.fld, r.nv)}</b>` },
@@ -845,7 +858,7 @@ async function showEditJob(id) {
   const fmt = (f, v) => { try { v = JSON.parse(v); } catch (e) { } if (f === 'fitment') return v == null ? '–' : `${n0(v.rows ?? 0)} fitment rows`; return f === 'bestoffer' ? esc(boText(v)) : f === 'specific' ? (v && v.name ? `${esc(v.name)}: ${esc(v.value ?? (v.restore ? v.restore.join(', ') : 'not set'))}` : Array.isArray(v) ? esc(v.join(', ')) : '–') : edFmt(f, v); };
   $('edJob').innerHTML = `<div class="panel-head"><div><h2>#${job.id}: ${esc(job.summary)}</h2><p>${job.done} of ${job.total} done · ${job.ok} changed · ${job.skipped} skipped · ${job.failed} failed · ${run ? 'working…' : esc(job.status)}</p></div></div>
     <div class="tbl-wrap"><table><thead><tr><th class="l">Account</th><th class="l">Listing</th><th class="l">Before</th><th class="l">After</th><th class="l">Result</th></tr></thead><tbody>${items.map(i => `<tr>
-      <td class="l">${esc(i.account)}</td><td class="l prod"><span class="t">${esc(i.title || '')}</span><span class="s">${esc(i.sku || '')} · <a href="https://www.ebay.co.uk/itm/${esc(i.item_id)}" target="_blank" rel="noopener">${esc(i.item_id)}</a></span></td>
+      <td class="l">${esc(i.account)}</td><td class="l prod">${TH(i.item_id, i.sku)}<span class="t">${esc(i.title || '')}</span><span class="s">${esc(i.sku || '')} · <a href="https://www.ebay.co.uk/itm/${esc(i.item_id)}" target="_blank" rel="noopener">${esc(i.item_id)}</a></span></td>
       <td class="l prod">${fmt(i.field, i.old_value)}</td><td class="l prod">${fmt(i.field, i.new_value)}</td>
       <td class="l prod">${i.status === 'ok' ? '<span class="chip k">Done</span> ' : i.status === 'failed' ? '<span class="chip m">Failed</span> ' : i.status === 'skipped' ? '<span class="chip ret">Skipped</span> ' : '<span class="chip b">Waiting</span> '}${esc(i.message || '')}</td></tr>`).join('')}</tbody></table></div>`;
   if (run) edJobTimer = setTimeout(() => showEditJob(id), 2500); else renderEditJobs();
@@ -891,7 +904,7 @@ function drawStock() {
   const synced = STK.skus.filter(r => r.enabled && r.on_hand != null).length;
   $('stSub').textContent = `${n0(rows.length)} SKUs shown · ${n0(synced)} synced. A SKU is only synced once it has a stock number. Sales before you set the number don't count.`;
   const cols = [
-    { h: 'SKU', l: 1, cl: 'prod', v: r => r.sku, f: r => `<span class="t">${esc(r.title || r.sku)}</span><span class="s">${esc(r.sku)}</span>` },
+    { h: 'SKU', l: 1, cl: 'prod', v: r => r.sku, f: r => `${TH(null, r.sku)}<span class="t">${esc(r.title || r.sku)}</span><span class="s">${esc(r.sku)}</span>` },
     { h: 'On eBay now', l: 1, v: r => r.listings.length, f: r => `<div class="qchips">${r.listings.map(l => `<a class="qchip ${r.en && r.tgt != null && l[2] !== r.tgt ? 'off' : ''}" href="https://www.ebay.co.uk/itm/${esc(l[1])}" target="_blank" rel="noopener" title="${esc(accName(l[0]))} · ${esc(l[1])}"><span class="dot" style="background:${accColor(l[0])}"></span>${l[2] ?? '–'}</a>`).join('') || '<span class="muted">not listed</span>'}</div>` },
     { h: 'Stock on hand', v: r => r.oh ?? -1, f: r => `<input type="number" class="cell-in ${'on_hand' in (stTyped.get(r.sku) || {}) ? 'changed' : ''}" data-sku="${esc(r.sku)}" min="0" step="1" value="${r.oh ?? ''}" placeholder="not set" aria-label="Stock for ${esc(r.sku)}">` },
     { h: 'Sync', v: r => r.en ? 1 : 0, f: r => `<input type="checkbox" class="st-en" data-sku="${esc(r.sku)}" ${r.en ? 'checked' : ''} aria-label="Sync ${esc(r.sku)}">` },
@@ -1020,7 +1033,7 @@ function drawConvo() {
   });
   const target = t.openMsgs[t.openMsgs.length - 1] || t.last;
   const draft = msDrafts.get(t.k) || '';
-  $('msConvo').innerHTML = `<div class="head"><h3>${t.item ? `<a href="https://www.ebay.co.uk/itm/${esc(t.item)}" target="_blank" rel="noopener">${esc(t.title || t.item)}</a>` : 'General question'}</h3>
+  $('msConvo').innerHTML = `<div class="head">${t.item ? TH(t.item) : ''}<h3>${t.item ? `<a href="https://www.ebay.co.uk/itm/${esc(t.item)}" target="_blank" rel="noopener">${esc(t.title || t.item)}</a>` : 'General question'}</h3>
       <div class="meta"><span><span class="dot" style="background:${accColor(t.a)}"></span>${esc(accName(t.a))}</span><span>Buyer: <b>${esc(t.sender)}</b></span>
       ${it ? `<span>SKU <span class="sku">${esc(it.sku || '–')}</span></span><span>${gbp(it.price)}</span><span>Stock ${it.qty ?? '–'}</span><span>Sold ${n0(it.sold)}</span>` : ''}
       ${t.open ? '<span class="chip ret">Needs a reply</span>' : t.done ? '<span class="chip b">Marked done</span>' : '<span class="chip k">Answered</span>'}</div></div>
@@ -1148,7 +1161,7 @@ function drawAds() {
   const canAct = r => ['stop', 'lower', 'raise', 'start'].includes(r.act) || adRateTyped.has(r.k);
   const cols = [
     { h: '', l: 1, v: r => adOff.has(r.k) ? 1 : 0, f: r => canAct(r) ? `<input type="checkbox" class="ad-sel" data-k="${esc(r.k)}" ${adTicked(r) ? 'checked' : ''} aria-label="Tick ${esc(r.sku || r.id)}">` : '' },
-    { h: 'Listing', l: 1, cl: 'prod', v: r => r.t, f: r => `<span class="t">${esc(r.t)}</span><span class="s"><span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)} · ${esc(r.sku || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(r.id)}" target="_blank" rel="noopener">${esc(r.id)}</a></span>` },
+    { h: 'Listing', l: 1, cl: 'prod', v: r => r.t, f: r => `${TH(r.id, r.sku)}<span class="t">${esc(r.t)}</span><span class="s"><span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)} · ${esc(r.sku || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(r.id)}" target="_blank" rel="noopener">${esc(r.id)}</a></span>` },
     { h: 'Price', v: r => r.price, f: r => gbp(r.price) + `<span class="sub">stock ${r.qty ?? '–'}</span>` },
     { h: 'Rate now', v: r => r.rate ?? -1, f: r => r.rate != null ? `${r.rate}%<span class="sub">${r.c.dyn ? 'dynamic · ' : ''}${esc((r.c.cname || '').slice(0, 22))}</span>` : '<span class="muted">not promoted</span>' },
     { h: 'Ad clicks', v: r => r.p ? r.p.clicks : -1, f: r => r.p ? `${n0(r.p.clicks)}<span class="sub">${n0(r.p.imp)} impr.</span>` : '–' },
@@ -1267,7 +1280,7 @@ function drawReturns() {
     .filter(o => !q || o.sku.toLowerCase().includes(q) || (o.t || '').toLowerCase().includes(q));
   $('rtSkuSub').textContent = `${n0(skuRows.length)} SKUs with a return, request or case · ${nice(from)} – ${nice(to)}. Flagged: 10%+ return rate with 2 or more returns.`;
   table($('rtSkus'), [
-    { h: 'SKU', l: 1, cl: 'prod', v: o => o.sku, f: o => `<span class="t">${esc(o.t || o.sku)}</span><span class="s">${esc(o.sku)}</span>` },
+    { h: 'SKU', l: 1, cl: 'prod', v: o => o.sku, f: o => `${TH(null, o.sku)}<span class="t">${esc(o.t || o.sku)}</span><span class="s">${esc(o.sku)}</span>` },
     { h: 'Sold', v: o => o.units, f: o => n0(o.units) },
     { h: 'Returns', v: o => o.ret, f: o => n0(o.ret) },
     { h: 'Not received / cases', v: o => o.other, f: o => n0(o.other) },
@@ -1283,7 +1296,7 @@ function drawReturns() {
     { h: 'Opened', l: 1, v: r => r.created, f: r => nice(r.d) },
     { h: 'Account', l: 1, v: r => r.account_id, f: r => `<span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)}` },
     { h: 'Type', l: 1, v: r => r.kind, f: r => `<span class="chip ${r.kind === 'case' ? 'm' : r.kind === 'inquiry' ? 'ret' : 'b'}">${{ return: 'Return', inquiry: 'Not received', case: 'Case' }[r.kind]}</span>` },
-    { h: 'Listing', l: 1, cl: 'prod', v: r => r.sku, f: r => `<span class="t">${esc(r.title || r.item_id || '')}</span><span class="s">${esc(r.sku || 'No SKU')} · buyer ${esc(r.buyer || '–')}${r.order_id ? ` · <a href="https://www.ebay.co.uk/sh/ord/details?orderid=${encodeURIComponent(r.order_id)}" target="_blank" rel="noopener">order</a>` : ''}</span>` },
+    { h: 'Listing', l: 1, cl: 'prod', v: r => r.sku, f: r => `${TH(r.item_id, r.sku)}<span class="t">${esc(r.title || r.item_id || '')}</span><span class="s">${esc(r.sku || 'No SKU')} · buyer ${esc(r.buyer || '–')}${r.order_id ? ` · <a href="https://www.ebay.co.uk/sh/ord/details?orderid=${encodeURIComponent(r.order_id)}" target="_blank" rel="noopener">order</a>` : ''}</span>` },
     { h: 'Reason', l: 1, cl: 'prod', v: r => rtReason(r), f: r => `<span class="${rtSellerSide(r) ? 'neg' : ''}">${esc(rtReason(r))}</span>${r.comments ? `<span class="cmt">"${esc(r.comments.slice(0, 220))}"</span>` : ''}` },
     { h: 'Status', l: 1, v: r => r.state || '', f: r => `${rtOpen(r) ? '<span class="chip ret">Open</span> ' : ''}<span class="sub">${esc(((r.state || r.status || '') + '').toLowerCase().replace(/_/g, ' '))}</span>` },
     { h: 'Refund', v: r => r.refund || 0, f: r => r.refund ? gbp(r.refund) : '–' },
@@ -1410,7 +1423,7 @@ function drawOffers() {
   $('ofSub').textContent = ofRows.length ? `${n0(rows.length)} listings with interested buyers · ${n0(ok.length)} can get an offer within your rules.` : $('ofSub').textContent;
   table($('ofTable'), [
     { h: '', l: 1, v: r => r.skip ? 1 : 0, f: r => r.skip ? '' : `<input type="checkbox" class="of-sel" data-k="${esc(r.k)}" ${ofOff.has(r.k) ? '' : 'checked'} aria-label="Send an offer for ${esc(r.sku || r.item_id)}">` },
-    { h: 'Listing', l: 1, cl: 'prod', v: r => r.title || '', f: r => `<span class="t">${esc(r.title || r.item_id)}</span><span class="s"><span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)} · ${esc(r.sku || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(r.item_id)}" target="_blank" rel="noopener">${esc(r.item_id)}</a></span>` },
+    { h: 'Listing', l: 1, cl: 'prod', v: r => r.title || '', f: r => `${TH(r.item_id, r.sku)}<span class="t">${esc(r.title || r.item_id)}</span><span class="s"><span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)} · ${esc(r.sku || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(r.item_id)}" target="_blank" rel="noopener">${esc(r.item_id)}</a></span>` },
     { h: 'Price now', v: r => r.price || 0, f: r => gbp(r.price) + `<span class="sub">stock ${r.qty ?? '–'}</span>` },
     { h: 'Lowest price', v: r => r.floor ?? -1, f: r => r.floor != null ? `${gbp(r.floor)}<span class="sub">keeps ${gbp(OFS.settings.offer_min_profit)}</span>` : '–' },
     { h: 'Offer', v: r => r.offer ?? -1, f: r => r.offer != null && !r.skip ? `<b>${gbp(r.offer)}</b><span class="sub">${((1 - r.offer / r.price) * 100).toFixed(1)}% off</span>` : '–' },
@@ -1426,7 +1439,7 @@ function drawOfferLog() {
   const shown = OFS.log.filter(o => o.status !== 'sent' || ofInWin().includes(o));
   $('ofLog').innerHTML = shown.length ? `<thead><tr><th class="l">When (UTC)</th><th class="l">Account</th><th class="l">Listing</th><th>Price</th><th>Offer</th><th>Buyers</th><th class="l">Sold</th><th class="l">Result</th></tr></thead><tbody>${shown.map(o => `<tr>
     <td class="l">${esc((o.at || '').slice(0, 16))}${o.auto ? '<span class="sub">automatic</span>' : o.by ? `<span class="sub">${esc(o.by.split('@')[0])}</span>` : ''}</td><td class="l">${esc(o.account || '')}</td>
-    <td class="l prod"><span class="t">${esc(o.title || '')}</span><span class="s">${esc(o.sku || '')} · <a href="https://www.ebay.co.uk/itm/${esc(o.item_id)}" target="_blank" rel="noopener">${esc(o.item_id)}</a></span></td>
+    <td class="l prod">${TH(o.item_id, o.sku)}<span class="t">${esc(o.title || '')}</span><span class="s">${esc(o.sku || '')} · <a href="https://www.ebay.co.uk/itm/${esc(o.item_id)}" target="_blank" rel="noopener">${esc(o.item_id)}</a></span></td>
     <td>${gbp(o.price)}</td><td><b>${gbp(o.offer_price)}</b></td><td>${n0(o.buyers)}</td>
     <td class="l prod">${(() => { const a = (o.sales || []).filter(x => x.at_offer), b = (o.sales || []).filter(x => !x.at_offer);
       return (a.length ? `<span class="chip k">${n0(a.reduce((t, x) => t + x.qty, 0))} at offer</span> <span class="sub">${money(a.reduce((t, x) => t + x.profit, 0))} profit</span>` : o.status === 'sent' ? '<span class="muted">none yet</span>' : '') +
@@ -1493,7 +1506,7 @@ function pmResult(el, prev, label) {
   el.innerHTML = `<div class="form-row" style="padding-top:0"><b>${n0(tin)} listings ${label}</b><span class="muted">${accs.map(([a, v]) => `${esc(accName(+a))}: ${n0(v.in.length)} in, ${n0(v.out.length)} left out`).join(' · ')}</span>
     ${out.length ? `<button class="link" type="button" data-pmshow>Show the ${n0(out.length)} left out</button>` : ''}</div>
     <div class="tbl-wrap" data-pmout hidden><table><thead><tr><th class="l">Account</th><th class="l">Listing</th><th>Price</th><th class="l">Why left out</th></tr></thead><tbody>${out.slice(0, 1000).map(({ a, x }) => `<tr>
-      <td class="l">${esc(accName(a))}</td><td class="l prod"><span class="t">${esc(x[2] || '')}</span><span class="s">${esc(x[1] || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(x[0])}" target="_blank" rel="noopener">${esc(x[0])}</a></span></td><td>${gbp(x[3])}</td><td class="l prod"><span class="muted">${esc(x[4])}</span></td></tr>`).join('')}</tbody></table></div>`;
+      <td class="l">${esc(accName(a))}</td><td class="l prod">${TH(x[0], x[1])}<span class="t">${esc(x[2] || '')}</span><span class="s">${esc(x[1] || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(x[0])}" target="_blank" rel="noopener">${esc(x[0])}</a></span></td><td>${gbp(x[3])}</td><td class="l prod"><span class="muted">${esc(x[4])}</span></td></tr>`).join('')}</tbody></table></div>`;
   const s = el.querySelector('[data-pmshow]'); if (s) s.onclick = () => { const t = el.querySelector('[data-pmout]'); t.hidden = !t.hidden; };
   return tin;
 }
@@ -1581,7 +1594,7 @@ function cpCount() { const n = document.querySelectorAll('.cp-sel:checked').leng
 function drawCp() {
   $('cpTable').innerHTML = cpRows.length ? `<thead><tr><th class="l"><input type="checkbox" id="cpAll" aria-label="Select all" checked></th><th class="l">SKU</th><th class="l">Title</th><th>Price now</th><th>New price</th><th>Sold</th><th class="l"></th></tr></thead><tbody>${
     cpRows.map((r, i) => `<tr><td class="l"><input type="checkbox" class="cp-sel" id="cp-${i}" data-item="${esc(r.item_id)}" ${r.dupe_in_source ? '' : 'checked'} aria-label="Select ${esc(r.sku)}"></td>
-      <td class="l"><span class="sku">${esc(r.sku)}</span></td><td class="l prod"><span class="t">${esc(r.title)}</span></td><td>${gbp(r.price)}</td><td><b>${gbp(newPrice(r.price || 0))}</b></td><td>${n0(r.sold)}</td>
+      <td class="l"><span class="sku">${esc(r.sku)}</span></td><td class="l prod">${TH(r.item_id, r.sku)}<span class="t">${esc(r.title)}</span></td><td>${gbp(r.price)}</td><td><b>${gbp(newPrice(r.price || 0))}</b></td><td>${n0(r.sold)}</td>
       <td class="l">${r.dupe_in_source ? '<span class="chip ret">Same SKU listed twice on source</span>' : ''}</td></tr>`).join('')}</tbody>`
     : `<tbody><tr><td class="empty">Every listing with that SKU start is already on the other account.</td></tr></tbody>`;
   const all = $('cpAll'); if (all) all.onchange = () => { document.querySelectorAll('.cp-sel').forEach(b => b.checked = all.checked); cpCount(); };
@@ -1684,7 +1697,7 @@ function drawCompete() {
   $('cmSub').textContent = `${n0(rows.length)} listings` + (rows.length > cpState.limit ? ` (first ${n0(cpState.limit)} shown)` : '') + '. Click the number of sellers to see them, mark ones that aren\'t the same part, or change the search words.';
   table($('cmTable'), [
     { h: '', l: 1, v: r => r.suggest != null ? 0 : 1, f: r => r.suggest != null ? `<input type="checkbox" class="cm-sel" data-k="${esc(r.k)}" ${cpTicked(r) ? 'checked' : ''} aria-label="Change the price of ${esc(r.sku || r.item_id)}">` : '' },
-    { h: 'Listing', l: 1, cl: 'prod', v: r => r.title || '', f: r => `<span class="t">${esc(r.title || r.item_id)}</span><span class="s"><span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)} · ${esc(r.sku || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(r.item_id)}" target="_blank" rel="noopener">${esc(r.item_id)}</a> · stock ${r.qty ?? '–'}</span>` },
+    { h: 'Listing', l: 1, cl: 'prod', v: r => r.title || '', f: r => `${TH(r.item_id, r.sku)}<span class="t">${esc(r.title || r.item_id)}</span><span class="s"><span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)} · ${esc(r.sku || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(r.item_id)}" target="_blank" rel="noopener">${esc(r.item_id)}</a> · stock ${r.qty ?? '–'}</span>` },
     { h: 'You', v: r => r.ours ?? r.price ?? 0, f: r => `<b>${gbp(r.ours ?? r.price)}</b>` + (r.post ? `<span class="sub">${gbp(r.price)} + ${gbp(r.post)} post</span>` : r.checked ? '<span class="sub">free post</span>' : '') },
     { h: 'Cheapest other', v: r => r.cheapest ?? 1e9, f: r => r.cheapest != null ? `<a href="${esc(r.cheapest_url || '#')}" target="_blank" rel="noopener">${gbp(r.cheapest)}</a><span class="sub">${esc(r.cheapest_seller || '')}</span>` : '–' },
     { h: 'Middle price', v: r => r.median ?? 1e9, f: r => r.median != null ? gbp(r.median) : '–' },
@@ -1790,7 +1803,7 @@ function drawFitment() {
   else ftState.empty = 'No listings for this selection.';
   table($('ftTable'), [
     { h: '', l: 1, v: r => ftCan(r) ? 0 : 1, f: r => ftCan(r) ? `<input type="checkbox" class="ft-sel" data-k="${esc(r.k)}" ${ftOff.has(r.k) ? '' : 'checked'} aria-label="Copy fitment to ${esc(r.sku || r.item_id)}">` : '' },
-    { h: 'Listing', l: 1, cl: 'prod', v: r => r.title || '', f: r => `<span class="t">${esc(r.title || r.item_id)}</span><span class="s"><span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)} · ${esc(r.sku || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(r.item_id)}" target="_blank" rel="noopener">${esc(r.item_id)}</a></span>` },
+    { h: 'Listing', l: 1, cl: 'prod', v: r => r.title || '', f: r => `${TH(r.item_id, r.sku)}<span class="t">${esc(r.title || r.item_id)}</span><span class="s"><span class="dot" style="background:${ACC[r.a].color}"></span>${esc(ACC[r.a].name)} · ${esc(r.sku || 'No SKU')} · <a href="https://www.ebay.co.uk/itm/${esc(r.item_id)}" target="_blank" rel="noopener">${esc(r.item_id)}</a></span>` },
     { h: 'Fitment rows', v: r => r.rows ?? -1, f: r => r.rows == null ? (r.status === 'error' ? '<span class="neg">error</span>' : '<span class="muted">not checked</span>') : r.rows ? `<a href="#" class="ft-open" data-k="${esc(r.k)}">${n0(r.rows)}</a>` : (r.supports === false ? '<span class="muted">0 · category has none</span>' : '0') },
     { h: 'Main fitment', l: 1, v: r => r.fit[0] ? r.fit[0].make + ' ' + r.fit[0].model : '', f: r => r.fit[0] ? `${esc(r.fit[0].make)} ${esc(r.fit[0].model)}${r.fit[0].y0 ? ` <span class="muted">${r.fit[0].y0}–${r.fit[0].y1}</span>` : ''}${r.fit.length > 1 ? `<span class="sub">+ ${r.fit.length - 1} more make/model${r.fit.length > 2 ? 's' : ''}</span>` : ''}` : '–' },
     { h: 'Problems', l: 1, cl: 'prod', v: r => -r.level, f: r => r.status === 'error' ? `<span class="neg">${esc(r.message || '')}</span>` : r.issues.length ? r.issues.map(i => `<div style="margin:2px 0"><span class="chip ${FTC[i.code][1]}">${FTC[i.code][0]}</span> <span class="muted">${esc(i.text)}</span></div>`).join('') : r.checked ? '<span class="chip k">OK</span>' : '' },
@@ -2060,4 +2073,4 @@ async function load() {
   renderAll();
 }
 const start = (location.hash || '').slice(1);
-load().then(() => show(titles[start] ? start : (D.items.length ? 'dash' : 'uploads'))).catch(e => { if (e.message !== 'login') toast(e.message); });
+load().then(() => { show(titles[start] ? start : (D.items.length ? 'dash' : 'uploads')); loadThumbs(); }).catch(e => { if (e.message !== 'login') toast(e.message); });

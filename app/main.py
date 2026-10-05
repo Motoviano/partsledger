@@ -37,6 +37,8 @@ STATIC = Path(__file__).resolve().parent / "static"
 SECRET = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
 
 app = FastAPI(title="Partsledger", docs_url=None, redoc_url=None, openapi_url=None)
+from starlette.middleware.gzip import GZipMiddleware
+app.add_middleware(GZipMiddleware, minimum_size=1000)  # the data behind the pages is mostly repeated text: much smaller over the wire
 app.add_middleware(SessionMiddleware, secret_key=SECRET, session_cookie="pl_session", max_age=60 * 60 * 24 * 14,
                    same_site="lax", https_only=os.environ.get("HTTPS_ONLY", "1") == "1")
 
@@ -1134,6 +1136,39 @@ def icon(size: int):
 def ebay_limits(request: Request, refresh: int = 0):
     need_user(request)
     return RL.read(force=bool(refresh))
+
+
+# ------------------------------------------------------------------ small product photos
+_THUMB_G = re.compile(r"^https?://i\.ebayimg\.com/images/g/([A-Za-z0-9~_-]+)/s-l\d+\.\w+$")
+
+
+def _thumb_key(url):
+    """Short form of an eBay photo address: 'g:<id>' for the usual i.ebayimg.com/images/g/<id>/ form."""
+    m = _THUMB_G.match(url or "")
+    return "g:" + m.group(1) if m else url
+
+
+@app.get("/api/thumbs")
+def thumbs(request: Request):
+    """Photo per listing and per SKU, short keys only; the browser loads tiny versions straight from eBay."""
+    need_user(request)
+    with DB.db() as con:
+        items, skus = {}, {}
+        sku_map = {r["item_id"]: r["sku"] for r in con.execute("SELECT item_id,sku FROM sku_map")}
+        for r in con.execute("SELECT item_id, sku, img FROM listings WHERE img IS NOT NULL ORDER BY updated_at DESC, sold DESC"):
+            k = _thumb_key(r["img"])
+            items.setdefault(r["item_id"], k)
+            sku = (sku_map.get(r["item_id"]) or r["sku"] or "").upper()
+            if sku:
+                skus.setdefault(sku, k)
+    body = json.dumps({"i": items, "s": skus}, separators=(",", ":"))
+    import hashlib
+    etag = 'W/"th-' + hashlib.md5(body.encode()).hexdigest()[:16] + '"'  # changes whenever any photo changes
+    if request.headers.get("if-none-match") == etag:
+        from fastapi.responses import Response
+        return Response(status_code=304, headers={"ETag": etag})
+    from fastapi.responses import Response
+    return Response(body, media_type="application/json", headers={"ETag": etag, "Cache-Control": "private, max-age=0, must-revalidate"})
 
 
 # ------------------------------------------------------------------ offers to interested buyers

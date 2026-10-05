@@ -281,3 +281,9 @@ a.btn{text-decoration:none;display:inline-block}
 
 .tile .cmp{display:block;font-size:11px;color:var(--muted);font-weight:400;margin-top:1px}
 .tile .kv.payout b{font-weight:700}
+
+/* small product photos: fixed size so rows don't jump while they load; bigger on hover */
+.th{float:left;width:40px;height:40px;margin:1px 10px 2px 0;border-radius:5px;object-fit:cover;background:var(--surface2);border:1px solid var(--line);position:relative;transition:transform .12s ease}
+img.th:hover{transform:scale(3);transform-origin:left center;z-index:5;box-shadow:0 6px 24px rgba(0,0,0,.25)}
+td.prod{overflow:visible}
+@media (max-width:620px){.th{width:32px;height:32px;margin-right:8px}}
