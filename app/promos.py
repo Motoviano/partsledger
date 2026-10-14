@@ -294,16 +294,37 @@ def stop_multibuy(db_factory, user=None):
     refresh_all(db_factory)
 
 
+def _sale_image(con, tok, account_id, ids):
+    """eBay requires a promotion image for a sale: use the photo of a listing in it (listings sync keeps them)."""
+    for i in ids[:20]:
+        r = con.execute("SELECT img FROM listings WHERE account_id=? AND item_id=?", (account_id, i)).fetchone()
+        if r and r["img"] and r["img"].startswith("https://"):
+            return r["img"]
+    for i in ids[:3]:  # not synced yet: read it from eBay
+        try:
+            it = EB.get_item(tok, i)
+            u = it.findtext(f"{EB.N}PictureDetails/{EB.N}GalleryURL") or it.findtext(f"{EB.N}PictureDetails/{EB.N}PictureURL") if it is not None else None
+            if u and u.startswith("https://"):
+                return u
+        except Exception:
+            DB.log_exc("promos.sale_image", level="warn")
+    return None
+
+
 def create_sale(db_factory, account_id, name, pct, ids, start, end, user=None):
     with db_factory() as con:
         tok = EB.access_token(con, account_id)
+        img = _sale_image(con, tok, account_id, ids)
     made = []
     for n, chunk in enumerate([ids[i:i + 500] for i in range(0, len(ids), 500)], start=1):
         body = {"name": (name + (f" {n}" if len(ids) > 500 else ""))[:90], "marketplaceId": "EBAY_GB", "promotionStatus": "SCHEDULED",
+                "description": f"{pct:g}% off selected items"[:50],
                 "startDate": _iso(start), "endDate": _iso(end), "applyFreeShipping": False, "autoSelectFutureInventory": False,
                 "blockPriceIncreaseInItemRevision": False,
                 "selectedInventoryDiscounts": [{"discountBenefit": {"percentageOffItem": f"{pct:g}"}, "ruleOrder": 1,
                                                 "inventoryCriterion": {"inventoryCriterionType": "INVENTORY_BY_VALUE", "listingIds": chunk}}]}
+        if img:
+            body["promotionImageUrl"] = img
         st, j, h = _req("POST", f"{MKT}/item_price_markdown", tok, body)
         try:
             _ok(st, j, "Creating the sale")
