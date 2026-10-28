@@ -115,7 +115,13 @@ def _ebay(acc, rows):
         o_net = sum(r["net"] or 0 for r in money)
         lines = [r for r in rs if r["item_id"]]
         if not lines:
-            continue
+            if not money or not o_sales:
+                continue
+            # A sale whose items eBay hasn't given us yet: still count it, so no sale goes missing.
+            # The next eBay sync fills in the real item (see ebay.repair_sales).
+            h = money[0]
+            lines = [{**h, "item_id": "", "sku": None, "qty": 1, "item_subtotal": None, "postage": None,
+                      "title": h["title"] or f"Item details not received from eBay yet (order {o})"}]
         tot_q = sum((r["qty"] or 1) for r in lines)
         vals = []
         for r in lines:

@@ -414,9 +414,13 @@ def ebay_status(request: Request):
                                   "traffic": EB.ANALYTICS_SCOPE in EB.granted(r)} for r in con.execute("SELECT * FROM ebay_tokens")}
         accs = [dict(r) for r in con.execute("SELECT id,name,seller_id,color FROM accounts WHERE channel='ebay' ORDER BY sort,id")]
         sync = {r["account_id"]: dict(r) for r in con.execute("SELECT * FROM sync_state")}
+        gaps = {}
+        for m in EB.missing_sales(con):
+            gaps[m[0]] = gaps.get(m[0], 0) + 1
     for a in accs:
         a["connection"] = toks.get(a["id"])
         a["sync"] = sync.get(a["id"])
+        a["missing_items"] = gaps.get(a["id"], 0)
     return {"configured": EB.configured(), "missing": EB.missing_settings(), "accounts": accs,
             "callbackHint": (os.environ.get("PUBLIC_URL", "").rstrip("/") + "/ebay/callback") if os.environ.get("PUBLIC_URL") else None}
 

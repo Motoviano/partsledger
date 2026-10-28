@@ -1557,6 +1557,7 @@ async function renderEbay() {
       <td class="l">${c ? `<span class="chip k">Connected as ${esc(c.ebay_user)}</span>` : '<span class="chip m">Not connected</span>'}</td>
       <td class="l">${c && c.refresh_expires ? nice(c.refresh_expires) : '–'}</td>
       <td class="l prod">${sy && sy.last_tx_sync ? `${esc(sy.last_tx_sync.slice(0, 16))} UTC · ${sy.last_status === 'ok' ? '' : '<span class="chip m">Error</span> '}${esc(sy.last_message || '')}` : (c ? 'Waiting for first sync' : '–')}
+        ${a.missing_items ? `<br><span class="chip ret">${n0(a.missing_items)} sales waiting for item details</span> <span class="muted">counted already; filled in at the next sync</span>` : ''}
         ${c ? (!c.traffic ? '<br><span class="chip ret">Reconnect to add traffic data</span>' : sy && sy.traffic_message ? `<br><span class="muted">Traffic:</span> ${sy.traffic_status === 'error' ? '<span class="chip m">Error</span> ' : ''}${esc(sy.traffic_message)}` : '<br><span class="muted">Traffic: waiting for next sync</span>') : ''}</td>
       <td>${ME.is_admin ? `<a class="btn ${c && !c.traffic ? 'primary' : ''}" href="/ebay/connect/${a.id}">${c ? 'Reconnect' : 'Connect'}</a>${c ? ` <button class="link danger" type="button" data-disc="${a.id}">Disconnect</button>` : ''}` : ''}</td></tr>`;
   }).join('')}</tbody>`;

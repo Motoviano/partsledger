@@ -700,6 +700,28 @@ def fetch_orders(token, start, end):
         offset += 200
 
 
+def fetch_order(token, order_id):
+    """One order by its id (getOrder). Finds orders the date-filtered list leaves out. None if eBay has no such order."""
+    try:
+        return _get_json(f"{FUL}/order/{urllib.parse.quote(str(order_id), safe='')}", token, marketplace=False)
+    except EbayError as e:
+        if "404" in str(e) or "not found" in str(e).lower() or "invalid" in str(e).lower():
+            return None
+        raise
+
+
+def line_rows(order, date, order_no, tid):
+    """Item rows for one sale, keyed like to_rows so a later sync never adds them twice."""
+    out = []
+    for i, li in enumerate((order or {}).get("lineItems") or []):
+        out.append({"date": date, "order_no": order_no, "type": "Order", "net": None, "gross": None, "description": None,
+                    "item_id": li.get("legacyItemId"), "sku": li.get("sku"), "title": li.get("title"),
+                    "qty": float(li.get("quantity") or 1), "item_subtotal": _amt(li.get("lineItemCost")),
+                    "postage": _amt((li.get("deliveryCost") or {}).get("shippingCost")) or 0.0,
+                    "_key": ["api", tid, "li", i]})
+    return out
+
+
 def _pic(it):
     """The listing's main photo address (the gallery picture, else the first photo)."""
     return it.findtext(f"{N}PictureDetails/{N}GalleryURL") or it.findtext(f"{N}PictureDetails/{N}PictureURL") or None
@@ -801,13 +823,7 @@ def to_rows(transactions, orders):
             if gross is None:
                 gross = net + (_amt(t.get("totalFeeAmount")) or 0)
             rows.append({**base, "type": "Order", "gross": round(gross, 2), "_key": ["api", tid, "h"]})
-            o = lines.get(oid) or {}
-            for i, li in enumerate(o.get("lineItems") or []):
-                rows.append({**base, "type": "Order", "net": None, "item_id": li.get("legacyItemId"), "sku": li.get("sku"),
-                             "title": li.get("title"), "qty": float(li.get("quantity") or 1),
-                             "item_subtotal": _amt(li.get("lineItemCost")),
-                             "postage": _amt((li.get("deliveryCost") or {}).get("shippingCost")) or 0.0,
-                             "_key": ["api", tid, "li", i]})
+            rows += line_rows(lines.get(oid), d, oid, tid)
         elif typ == "REFUND":
             gross = _amt(t.get("totalFeeBasisAmount"))
             rows.append({**base, "type": "Refund", "gross": -abs(gross) if gross else net, "_key": ["api", tid]})
@@ -850,6 +866,16 @@ def sync_account(db_factory, account_id, days_back=3, listings=True):
         tx = fetch_transactions(tok, start, end, sign)
         order_ids = {t.get("orderId") for t in tx if t.get("transactionType") == "SALE"}
         orders = fetch_orders(tok, (_dt.date.fromisoformat(start) - _dt.timedelta(days=30)).isoformat(), end) if order_ids else []
+        # Orders the date-filtered list misses (seen with sold-out / ended listings) are fetched one by one,
+        # otherwise the sale is stored without its item and never shows in the Dashboard or Sold items.
+        have = {o.get("orderId") for o in orders}
+        for oid in [x for x in order_ids if x and x not in have][:200]:
+            try:
+                o = fetch_order(tok, oid)
+            except EbayError:
+                o = None
+            if o:
+                orders.append(o)
         rows = to_rows(tx, orders)
         with db_factory() as con:
             # stable keys: "api|<transactionId>|..." so re-syncing the same days never double counts
@@ -864,6 +890,12 @@ def sync_account(db_factory, account_id, days_back=3, listings=True):
                 added += cur.rowcount
             skipped = len(rows) - added
         msg.append(f"{added} new rows from {len(tx)} eBay transactions and {len(orders)} orders ({start} to {end})")
+    try:
+        fixed = repair_sales(db_factory, account_id, tok)
+        if fixed:
+            msg.append(f"item details filled in for {fixed} earlier sales")
+    except EbayError:
+        pass
     if listings:
         ls = fetch_listings(tok)
         try:  # add listings the My eBay list leaves out, e.g. sold out but kept live by out-of-stock control
@@ -882,6 +914,45 @@ def sync_account(db_factory, account_id, days_back=3, listings=True):
         con.execute("UPDATE sync_state SET last_tx_sync=datetime('now'), last_status='ok', last_message=? WHERE account_id=?",
                     ("; ".join(msg), account_id))
     return "; ".join(msg)
+
+
+def missing_sales(con, account_id=None):
+    """Synced sales stored without their items: (account_id, order_no, date, transactionId, gross)."""
+    q = """SELECT h.account_id, h.order_no, h.date, h.row_key, h.gross FROM transactions h
+           WHERE h.type='Order' AND h.row_key LIKE 'api:%:h' AND h.order_no IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM transactions l WHERE l.account_id=h.account_id AND l.order_no=h.order_no
+                             AND l.type='Order' AND l.item_id IS NOT NULL AND l.item_id!='')"""
+    args = []
+    if account_id is not None:
+        q += " AND h.account_id=?"
+        args.append(account_id)
+    return [(r[0], r[1], r[2], r[3].split(":")[1], r[4]) for r in con.execute(q + " ORDER BY h.date DESC", args)]
+
+
+_REPAIR_TRIED = {}
+
+
+def repair_sales(db_factory, account_id, tok, limit=150):
+    """Fetch the items for earlier sales that were saved without them, so they count in every report."""
+    with db_factory() as con:
+        now = time.time()  # an order eBay can't find is asked for again at most every 6 hours
+        todo = [m for m in missing_sales(con, account_id) if now - _REPAIR_TRIED.get((account_id, m[1]), 0) > 6 * 3600][:limit]
+    fixed = 0
+    for _, oid, d, tid, _g in todo:
+        _REPAIR_TRIED[(account_id, oid)] = time.time()
+        o = fetch_order(tok, oid)
+        rows = line_rows(o, d, oid, tid)
+        if not rows:
+            continue
+        with db_factory() as con:
+            for r in rows:
+                con.execute("""INSERT OR IGNORE INTO transactions(account_id,row_key,date,type,order_no,item_id,title,sku,qty,item_subtotal,postage,gross,net,description,upload_id)
+                               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)""",
+                            (account_id, "api:" + ":".join(str(x) for x in r["_key"][1:]), r["date"], r["type"], r["order_no"], r["item_id"],
+                             r["title"], r["sku"], r["qty"], r["item_subtotal"], r["postage"], r["gross"], r["net"], r["description"]))
+        fixed += 1
+        time.sleep(0.1)
+    return fixed
 
 
 # ------------------------------------------------------------------ Traffic per listing (Analytics API)
