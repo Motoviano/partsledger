@@ -119,12 +119,9 @@ function renderTileMenu() {
   const sel = $('tileSet'); if (!sel) return;
   sel.innerHTML = Object.entries(TILESETS).map(([k, v]) => `<option value="${k}" ${k === tileSet ? 'selected' : ''}>${v[0]}</option>`).join('');
 }
-function renderTiles() {
-  const f = F(), keys = (TILESETS[tileSet] || TILESETS.tymfl)[1];
-  const lmR = tileDef('lm').r, lm = totals(itemsIn(f, lmR), ohIn(f, lmR));
-  $('tiles').style.gridTemplateColumns = `repeat(${keys.length},minmax(0,1fr))`;
-  $('tiles').innerHTML = keys.map((k, i) => {
-    const td = tileDef(k); let T, sub = td.r[0] === td.r[1] ? nice(td.r[0]) : `${nice(td.r[0])} – ${nice(td.r[1])}`;
+const payoutOf = T => T.sales + T.fee + T.ad + T.po + T.rf + T.oh;
+function tileTotals(k, f, lm, lmR) {
+  const td = tileDef(k); let T, sub = td.r[0] === td.r[1] ? nice(td.r[0]) : `${nice(td.r[0])} – ${nice(td.r[1])}`;
     if (k === 'fc') {
       // Forecast = what has sold so far this month + the expected daily pace for the days left.
       // The pace blends the last 14 full days with last month's daily average, so a slow or busy
@@ -140,6 +137,14 @@ function renderTiles() {
       T.oh = Math.min(T.oh, lm.oh); T.net = T.gross + T.oh;
       sub += ' · pace from last 14 days and last month';
     } else T = totals(itemsIn(f, td.r), ohIn(f, td.r));
+  return { T, sub };
+}
+function renderTiles() {
+  const f = F(), keys = (TILESETS[tileSet] || TILESETS.tymfl)[1];
+  const lmR = tileDef('lm').r, lm = totals(itemsIn(f, lmR), ohIn(f, lmR));
+  $('tiles').style.gridTemplateColumns = `repeat(${keys.length},minmax(0,1fr))`;
+  $('tiles').innerHTML = keys.map((k, i) => {
+    const td = tileDef(k), { T, sub } = tileTotals(k, f, lm, lmR);
     // Sales change: month to date against the same days of last month (1st to the same day number);
     // the forecast against the whole of last month. No % when the comparison period had no sales.
     let cmp = null, cmpR = null;
@@ -148,7 +153,7 @@ function renderTiles() {
     const d = cmp && cmp.sales > 0 ? (T.sales - cmp.sales) / cmp.sales : null;
     const dTip = d != null ? `Compared with ${cmpR[0] === cmpR[1] ? nice(cmpR[0]) : nice(cmpR[0]) + ' – ' + nice(cmpR[1])}: ${gbp(cmp.sales)}` : '';
     // what eBay pays out for these sales: sales less the fees, ads, postage labels and refunds eBay takes before paying
-    const payout = T.sales + T.fee + T.ad + T.po + T.rf + T.oh;
+    const payout = payoutOf(T);
     return `<article class="tile ${activeTile === k ? 'active' : ''}" style="--hd:var(${TILE_COLORS[i % 5]})" data-tile="${k}" tabindex="0" role="button" aria-label="Show ${td.name} in the product table">
       <header><b>${td.name}</b><span>${sub}</span></header><div class="body">
       <div class="kv big"><small>Sales${d != null ? ` <span class="delta ${d < 0 ? 'neg' : 'pos'}" title="${esc(dTip)}">${d >= 0 ? '+' : ''}${(d * 100).toFixed(1)}%</span>` : ''}</small><b>${gbp(T.sales)}</b>${d != null ? `<span class="cmp">vs ${esc(k === 'mtd' ? 'same days last month' : 'last month')}</span>` : ''}</div>
@@ -162,7 +167,7 @@ function renderTiles() {
       <div class="kv"><small>Product profit</small><b>${gbp(T.gross)}</b></div>
       <div class="kv"><small>Other fees</small><b class="${cls(T.oh)}">${gbp(T.oh)}</b></div>
       <div class="net"><small>Net profit${k === 'fc' ? '<span class="delta">estimate</span>' : ''}</small><b class="${cls(T.net)}">${gbp(T.net)}</b></div>
-    </div></article>`;
+    </div><button class="tile-more" type="button" data-more="${k}">More</button></article>`;
   }).join('');
   document.querySelectorAll('[data-tile]').forEach(el => {
     const go = () => {
@@ -170,9 +175,56 @@ function renderTiles() {
       $('fPeriod').value = 'custom'; $('fFrom').value = td.r[0]; $('fTo').value = el.dataset.tile === 'fc' ? TODAY : td.r[1];
       ordState.limit = 100; renderAll(); $('prodTable').scrollIntoView({ behavior: 'smooth', block: 'start' });
     };
-    el.onclick = go; el.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
+    el.querySelector('[data-more]').onclick = e => { e.stopPropagation(); tileDetail(el.dataset.tile); };
+    el.onclick = go; el.onkeydown = e => { if (e.target === el && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); go(); } };
   });
 }
+// Tile "More": the full breakdown behind one tile, like a P&L for that period.
+function tileDetail(k) {
+  const f = F(), lmR = tileDef('lm').r, lm = totals(itemsIn(f, lmR), ohIn(f, lmR)), td = tileDef(k), { T, sub } = tileTotals(k, f, lm, lmR);
+  const fc = k === 'fc', r = fc ? [td.r[0], TODAY] : td.r, its = itemsIn(f, r), oh = ohIn(f, r), pay = payoutOf(T);
+  const accs = ACC.filter(a => f.a.has(a.i)).map(a => { const g = { ...f, a: new Set([a.i]) }; return { a, T: fc ? tileTotals(k, g, totals(itemsIn(g, lmR), ohIn(g, lmR)), lmR).T : totals(itemsIn(g, r), ohIn(g, r)) }; }).filter(x => x.T.sales || x.T.oh || x.T.rf);
+  const sub1 = rows => rows.length ? `<div class="dt-sub">${rows.map(([l, v, raw]) => `<div><span>${l}</span><b class="${raw ? '' : cls(v)}">${raw ? v : gbp(v)}</b></div>`).join('')}</div>` : '';
+  const line = (label, v, opts = {}) => {
+    const val = opts.raw != null ? opts.raw : gbp(v), kids = opts.kids || [];
+    const head = `<span>${label}${opts.tip ? ` <i class="muted">${opts.tip}</i>` : ''}</span><b class="${opts.raw != null ? '' : cls(v)}">${val}</b>`;
+    return kids.length ? `<details class="dt-row ${opts.cl || ''}"><summary>${head}</summary>${sub1(kids)}</details>` : `<div class="dt-row ${opts.cl || ''}">${head}</div>`;
+  };
+  const byAcc = key => accs.length > 1 && Math.abs(T[key]) >= 0.005 ? accs.filter(x => Math.abs(x.T[key]) >= 0.005).map(x => [esc(x.a.name), x.T[key]]) : [];
+  // other fees: grouped by what they are, then by account; credits (money back from eBay) show as plus amounts
+  const om = new Map(); oh.forEach(o => { const key = o.k + '|' + o.a; const e = om.get(key) || { k: o.k, a: o.a, v: 0, n: 0 }; e.v += o.v; e.n++; om.set(key, e); });
+  const ohRows = [...om.values()].sort((a, b) => a.v - b.v).map(e => [`${esc(e.k)}${e.n > 1 ? ` ×${e.n}` : ''}<em>${esc(ACC[e.a].name)}</em>`, e.v]);
+  const credits = [...om.values()].filter(e => e.v > 0).reduce((t, e) => t + e.v, 0), charges = T.oh - credits;
+  const refundUnits = its.filter(x => x.ret).reduce((t, x) => t + x.q, 0), refundOrders = new Set(its.filter(x => x.rf < 0).map(x => x.a + '|' + x.o)).size;
+  const cogsNet = T.cogs - T.back, pc = v => isFinite(v) ? (v * 100).toFixed(2) + '%' : '–';
+  const notes = [];
+  if (T.net > T.sales && T.oh > 0) notes.push(`Net profit is higher than sales because eBay paid back ${gbp(credits)} in this period (see Other fees). Those credits usually belong to earlier sales, for example a refunded fee or a cancelled postage label.`);
+  if (pay < 0) notes.push(`The payout is negative because the other fees (${gbp(charges)}) are bigger than what these sales bring in. eBay takes them from the balance, so the next payout is smaller.`);
+  if (its.some(x => !x.id)) notes.push('Some sales are still waiting for item details from eBay. They are counted, with an estimated cost.');
+  $('tdTitle').textContent = td.name; $('tdSub').textContent = sub;
+  $('tdBody').innerHTML = (fc ? '<p class="dt-note">Estimate: what has sold so far this month plus the expected pace for the days left. The lists underneath show this month so far.</p>' : '') +
+    line('Sales', T.sales, { cl: 'b', kids: byAcc('sales') }) +
+    line('Orders / units', 0, { raw: `${n0(T.orders)} / ${n0(T.units)}` }) +
+    line('Returns', 0, { raw: `${n0(T.ret)} units`, tip: refundOrders ? `${n0(refundOrders)} orders with a refund` : '' }) +
+    line('Refunds', T.rf, { kids: byAcc('rf') }) +
+    line('Ads', T.ad, { kids: byAcc('ad') }) +
+    line('Postage labels', T.po, { kids: byAcc('po') }) +
+    line('eBay fees', T.fee, { tip: 'final value and per-order fees', kids: byAcc('fee') }) +
+    line('COGS (net of returns)', -cogsNet, { kids: [['Cost of items sold', -T.cogs], ...(T.back ? [['Returned items back in stock', T.back]] : [])] }) +
+    line('Product profit', T.gross, { cl: 'b' }) +
+    line('Other fees and credits', T.oh, { tip: 'not tied to one sale', kids: ohRows.length ? ohRows : [['None in this period', 0]] }) +
+    line('Net profit', T.net, { cl: 'b big' }) +
+    line('Payout (approx.)', pay, { cl: 'b', tip: 'what eBay pays out', kids: [['Sales', T.sales], ['Refunds', T.rf], ['eBay fees', T.fee], ['Ads', T.ad], ['Postage labels', T.po], ['Other fees and credits', T.oh], ['Payout', pay]] }) +
+    `<div class="dt-kpis"><div><small>Margin</small><b>${pc(T.net / T.sales)}</b></div><div><small>ROI</small><b>${pc(T.net / cogsNet)}</b></div><div><small>Ads % of sales</small><b>${pc(-T.ad / T.sales)}</b></div><div><small>Return rate</small><b>${pc(refundUnits / T.units)}</b></div></div>` +
+    (accs.length > 1 ? `<h3 class="dt-h">By account</h3><table class="dt-acc"><thead><tr><th class="l">Account</th><th>Sales</th><th>Payout</th><th>Net profit</th></tr></thead><tbody>${accs.map(x => `<tr><td class="l"><span class="dot" style="background:${x.a.color}"></span>${esc(x.a.name)}</td><td>${gbp(x.T.sales)}</td><td class="${cls(payoutOf(x.T))}">${gbp(payoutOf(x.T))}</td><td class="${cls(x.T.net)}">${gbp(x.T.net)}</td></tr>`).join('')}</tbody></table>` : '') +
+    notes.map(n => `<p class="dt-note">${n}</p>`).join('') +
+    '<p class="dt-foot">Payout leaves out COGS: that is money you paid your suppliers, not something eBay takes.</p>';
+  $('tdShow').onclick = () => { $('tileDlg').close(); document.querySelector(`[data-tile="${k}"]`)?.click(); };
+  $('tileDlg').showModal();
+}
+$('tdClose').onclick = () => $('tileDlg').close();
+$('tileDlg').addEventListener('click', e => { if (e.target === $('tileDlg')) $('tileDlg').close(); });
+
 // ---------------------------------------------------------------- small product photos
 // Loaded once after the main data (cached by the browser with an ETag). Each photo is a 64px version straight from
 // eBay's image servers, loaded lazily, so only the rows on screen fetch anything.
@@ -307,6 +359,16 @@ function renderCharts() {
   const months = [...new Set(its.map(x => x.d.slice(0, 7)).concat(oh.map(o => o.d.slice(0, 7))))].sort();
   const mlab = months.map(m => dt(m + '-01').toLocaleDateString('en-GB', { month: 'short', year: '2-digit', timeZone: 'UTC' }));
   const accs = ACC.filter(a => f.a.has(a.i) && a.hasData);
+  const sumAcc = (a, m) => its.filter(x => x.a === a.i && x.d.startsWith(m)).reduce((t, x) => t + x.s, 0);
+  mk('cSales', { type: 'bar', data: { labels: mlab, datasets: accs.map(a => ({ label: a.name, backgroundColor: a.color, borderRadius: 3, data: months.map(m => +sumAcc(a, m).toFixed(2)) })) },
+    options: { maintainAspectRatio: false, scales: { x: { stacked: true, grid: { display: false } }, y: { stacked: true, ticks: { callback: v => '£' + v } } },
+      plugins: { tooltip: { callbacks: { label: c => `${c.dataset.label}: ${gbp(c.raw)}`, footer: it => 'Total sales: ' + gbp(it.reduce((s, c) => s + c.raw, 0)) } } } } });
+  const at = accs.map(a => { const g = { ...f, a: new Set([a.i]) }; return totals(itemsIn(g, f.r), ohIn(g, f.r)); });
+  mk('cAcc', { type: 'bar', data: { labels: accs.map(a => a.name), datasets: [
+      { label: 'Sales', data: at.map(t => +t.sales.toFixed(2)), backgroundColor: css('--t0'), borderRadius: 3 },
+      { label: 'Net profit', data: at.map(t => +t.net.toFixed(2)), backgroundColor: at.map(t => t.net < 0 ? css('--bad') : css('--t1')), borderRadius: 3 }] },
+    options: { maintainAspectRatio: false, plugins: { legend: { labels: { generateLabels: ch => ch.data.datasets.map((d, i) => ({ text: d.label, fillStyle: css(i ? '--t1' : '--t0'), strokeStyle: 'transparent', fontColor: css('--muted'), hidden: !ch.isDatasetVisible(i), datasetIndex: i })) } }, tooltip: { callbacks: { label: c => `${c.dataset.label}: ${gbp(c.raw)}`, afterBody: it => { const t = at[it[0].dataIndex]; return t.sales ? `Margin: ${(t.net / t.sales * 100).toFixed(1)}%` : ''; } } } },
+      scales: { x: { grid: { display: false } }, y: { ticks: { callback: v => '£' + v } } } } });
   mk('cMonth', { type: 'bar', data: { labels: mlab, datasets: accs.map(a => ({ label: a.name, backgroundColor: a.color, borderRadius: 3,
       data: months.map(m => +(its.filter(x => x.a === a.i && x.d.startsWith(m)).reduce((s, x) => s + profitOf(x), 0) + oh.filter(o => o.a === a.i && o.d.startsWith(m)).reduce((s, o) => s + o.v, 0)).toFixed(2)) })) },
     options: { maintainAspectRatio: false, scales: { x: { stacked: true, grid: { display: false } }, y: { stacked: true, ticks: { callback: v => '£' + v } } },
