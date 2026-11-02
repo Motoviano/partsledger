@@ -62,12 +62,13 @@ let selAcc = () => new Set(), selGrp = () => new Set(), groups = [];
 function buildMS(menuId, sumId, items, allLabel, noun) {
   const menu = $(menuId), prev = menu.dataset.built ? new Set([...menu.querySelectorAll('input[data-v]')].filter(b => !b.checked).map(b => b.dataset.v)) : new Set();
   menu.innerHTML = `<label class="all"><input type="checkbox" id="${menuId}-all" checked> ${allLabel}</label>` +
-    items.map((it, i) => `<label><input type="checkbox" id="${menuId}-${i}" data-v="${esc(it.v)}" ${prev.has(it.v) ? '' : 'checked'}> ${it.html}${it.note ? `<em>${it.note}</em>` : ''}</label>`).join('');
+    items.map((it, i) => `${it.sep ? `<div class="ms-sep">${esc(it.sep)}</div>` : ''}<label><input type="checkbox" id="${menuId}-${i}" data-v="${esc(it.v)}" ${(menu.dataset.built ? prev.has(it.v) : it.off) ? '' : 'checked'}> ${it.html}${it.note ? `<em>${it.note}</em>` : ''}</label>`).join('');
   menu.dataset.built = 1;
   const all = menu.querySelector('.all input'), boxes = [...menu.querySelectorAll('input[data-v]')], sum = document.querySelector('#' + sumId + ' summary');
   const sync = () => {
     const on = boxes.filter(b => b.checked); all.checked = on.length === boxes.length; all.indeterminate = on.length > 0 && on.length < boxes.length;
-    sum.textContent = on.length === boxes.length ? allLabel : on.length === 0 ? 'None selected' : on.length <= 2 ? on.map(b => b.dataset.v).join(', ') : `${on.length} ${noun} selected`;
+    const offs = new Set(items.filter(it => it.off).map(it => it.v)), isDef = offs.size && on.length === boxes.length - offs.size && on.every(b => !offs.has(b.dataset.v));
+    sum.textContent = on.length === boxes.length ? allLabel : isDef ? (items.find(it => !it.off && it.biz)?.biz || 'Main') + ' accounts' : on.length === 0 ? 'None selected' : on.length <= 2 ? on.map(b => b.dataset.v).join(', ') : `${on.length} ${noun} selected`;
   };
   all.onchange = () => { boxes.forEach(b => b.checked = all.checked); sync(); ordState.limit = 100; renderAll(); };
   boxes.forEach(b => b.onchange = () => { sync(); ordState.limit = 100; renderAll(); });
@@ -1615,7 +1616,7 @@ async function renderEbay() {
   setup.innerHTML = `The eBay keys aren't set yet. In Render, open partsledger → Environment and add: <b>${EBS.missing.map(esc).join(', ')}</b>. Then connect each account below.`;
   $('ebayAcc').innerHTML = `<thead><tr><th class="l">Account</th><th class="l">Status</th><th class="l">Login valid until</th><th class="l">Last sync</th><th></th></tr></thead><tbody>${EBS.accounts.map(a => {
     const c = a.connection, sy = a.sync;
-    return `<tr><td class="l"><span class="dot" style="background:${a.color}"></span>${esc(a.name)}</td>
+    return `<tr><td class="l"><span class="dot" style="background:${a.color}"></span>${esc(a.name)}${a.separate ? ` <span class="chip b" title="Kept apart: not selected by default and left out of Stock sync">${esc(a.business || 'Separate')} · separate</span>` : ''}</td>
       <td class="l">${c ? `<span class="chip k">Connected as ${esc(c.ebay_user)}</span>` : '<span class="chip m">Not connected</span>'}</td>
       <td class="l">${c && c.refresh_expires ? nice(c.refresh_expires) : '–'}</td>
       <td class="l prod">${sy && sy.last_tx_sync ? `${esc(sy.last_tx_sync.slice(0, 16))} UTC · ${sy.last_status === 'ok' ? '' : '<span class="chip m">Error</span> '}${esc(sy.last_message || '')}` : (c ? 'Waiting for first sync' : '–')}
@@ -2124,13 +2125,16 @@ async function load() {
   COGS = D.cogs.map(c => ({ ...c, prices: Object.fromEntries(c.prices.map((p, i) => [i, p])) }));
   groups = [...new Set(I.map(x => x.g).concat(COGS.map(c => c.group)))].sort();
   const gUnits = {}; I.forEach(x => gUnits[x.g] = (gUnits[x.g] || 0) + x.q);
-  selAcc = buildMS('accMenu', 'msAcc', ACC.map(a => ({ v: a.name, html: `<span class="dot" style="background:${a.color}"></span>${esc(a.name)}`, note: a.hasData ? '' : 'no data yet' })), 'All accounts', 'accounts');
+  // Accounts of a separate business (Aligoparts) are listed last and start unticked, so combined figures stay Motoviano-only
+  const accItems = ACC.filter(a => !a.separate).concat(ACC.filter(a => a.separate)).map((a, i, arr) => ({ v: a.name, off: a.separate, sep: a.separate && (i === 0 || !arr[i - 1].separate || arr[i - 1].business !== a.business) ? (a.business || 'Separate business') + ' · separate' : '',
+    html: `<span class="dot" style="background:${a.color}"></span>${esc(a.name)}`, biz: a.business || 'Motoviano Ltd', note: a.hasData ? '' : 'no data yet' }));
+  selAcc = buildMS('accMenu', 'msAcc', accItems, 'All accounts', 'accounts');
   selGrp = buildMS('grpMenu', 'msGrp', groups.map(g => ({ v: g, html: `<span class="sku">${esc(g)}</span>`, note: gUnits[g] ? n0(gUnits[g]) + ' sold' : '' })), 'All product groups', 'groups');
   $('upAcc').innerHTML = '<option value="">Work it out from the file</option>' + ACC.filter(a => a.channel === 'ebay').map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
   $('whoami').textContent = `${ME.name} (${ME.email})`;
   $('msgBadge').textContent = D.msgOpen || ''; $('msgBadge').hidden = !D.msgOpen;
   $('ssBadge').textContent = D.stdWarn ? '!' : ''; $('ssBadge').hidden = !D.stdWarn; $('ssBadge').title = D.stdWarn ? 'Seller standards need attention' : '';
-  $('sideFoot').innerHTML = `<strong>Motoviano Ltd</strong>${ACC.map(a => esc(a.name) + (a.hasData ? '' : ' (no data yet)')).join('<br>')}<br>${I.length ? 'Data up to ' + nice(D.asOf) : 'No data yet'}`;
+  $('sideFoot').innerHTML = `${[...new Set(ACC.map(a => a.business || 'Motoviano Ltd'))].map(b => `<strong>${esc(b)}</strong>${ACC.filter(a => (a.business || 'Motoviano Ltd') === b).map(a => esc(a.name) + (a.hasData ? '' : ' (no data yet)')).join('<br>')}`).join('<br>')}<br>${I.length ? 'Data up to ' + nice(D.asOf) : 'No data yet'}`;
   if (!$('cFrom').value) $('cFrom').value = TODAY;
   if (!$('fFrom').value) { $('fFrom').value = D.minDate; $('fTo').value = D.asOf; }
   renderAll();

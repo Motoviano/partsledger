@@ -190,6 +190,7 @@ def data(request: Request):
         std_warn = SS.warning_count(con)
     return {"me": u, "asOf": last or uk_today(), "today": uk_today(),
             "accounts": [{"id": a["id"], "name": a["name"], "channel": a["channel"], "color": a["color"],
+                          "separate": bool(a.get("separate")), "business": a.get("business") or "",
                           "hasData": any(i[1] == a["id"] for i in items)} for a in accounts],
             "items": items, "overheads": overheads, "cogs": cogs, "settings": settings, "uploads": ups, "msgOpen": msg_open, "stdWarn": std_warn}
 
@@ -412,7 +413,7 @@ def ebay_status(request: Request):
     with DB.db() as con:
         toks = {r["account_id"]: {**{k: r[k] for k in ("account_id", "ebay_user", "refresh_expires", "connected_at", "connected_by")},
                                   "traffic": EB.ANALYTICS_SCOPE in EB.granted(r)} for r in con.execute("SELECT * FROM ebay_tokens")}
-        accs = [dict(r) for r in con.execute("SELECT id,name,seller_id,color FROM accounts WHERE channel='ebay' ORDER BY sort,id")]
+        accs = [dict(r) for r in con.execute("SELECT id,name,seller_id,color,separate,business FROM accounts WHERE channel='ebay' ORDER BY sort,id")]
         sync = {r["account_id"]: dict(r) for r in con.execute("SELECT * FROM sync_state")}
         gaps = {}
         for m in EB.missing_sales(con):

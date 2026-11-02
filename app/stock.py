@@ -69,7 +69,7 @@ def listings_by_sku(con):
     """Active listings on connected eBay accounts, grouped by SKU."""
     sku = _sku_of(con)
     out = {}
-    for a in [r[0] for r in con.execute("SELECT account_id FROM ebay_tokens ORDER BY account_id")]:
+    for a in [r[0] for r in con.execute("SELECT t.account_id FROM ebay_tokens t JOIN accounts a ON a.id=t.account_id WHERE COALESCE(a.separate,0)=0 ORDER BY t.account_id")]:
         active = set(EB.active_listing_ids(con, a))
         for r in con.execute("SELECT item_id,sku,title,qty FROM listings WHERE account_id=?", (a,)):
             if r["item_id"] in active:
@@ -157,7 +157,7 @@ def check_orders(db_factory):
     """Take newly sold units off the stock counts. Returns the SKUs that changed."""
     changed = set()
     with db_factory() as con:
-        accounts = [r[0] for r in con.execute("SELECT account_id FROM ebay_tokens")]
+        accounts = [r[0] for r in con.execute("SELECT t.account_id FROM ebay_tokens t JOIN accounts a ON a.id=t.account_id WHERE COALESCE(a.separate,0)=0")]
         pool = {r["sku"]: dict(r) for r in con.execute("SELECT * FROM stock_pool WHERE on_hand IS NOT NULL")}
     if not pool:
         return changed

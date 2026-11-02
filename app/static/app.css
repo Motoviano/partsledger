@@ -320,3 +320,4 @@ td.prod{overflow:visible}
 .dt-foot{color:var(--muted);font-size:12px;margin:10px 0 0}
 @media (max-width:560px){.dt-kpis{grid-template-columns:repeat(2,1fr)}}
 .dt-row b,.dt-sub b{white-space:nowrap}.dt-row>summary span,div.dt-row span{min-width:0}
+.ms-sep{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);padding:8px 10px 2px;border-top:1px solid var(--line);margin-top:4px}

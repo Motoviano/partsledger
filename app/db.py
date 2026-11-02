@@ -92,6 +92,15 @@ def init():
         con.executescript(SCHEMA)
         if not con.execute("SELECT 1 FROM accounts").fetchone():
             con.executemany("INSERT INTO accounts(name,channel,seller_id,color,sort) VALUES(?,?,?,?,?)", DEFAULT_ACCOUNTS)
+        # Accounts of another business: in the app, but kept apart (not selected by default, not in stock sync)
+        cols = {r[1] for r in con.execute("PRAGMA table_info(accounts)")}
+        if "separate" not in cols:
+            con.execute("ALTER TABLE accounts ADD COLUMN separate INTEGER NOT NULL DEFAULT 0")
+        if "business" not in cols:
+            con.execute("ALTER TABLE accounts ADD COLUMN business TEXT")
+        con.execute("UPDATE accounts SET business='Motoviano Ltd' WHERE business IS NULL AND separate=0")
+        if not con.execute("SELECT 1 FROM accounts WHERE name='Aligoparts'").fetchone():
+            con.execute("INSERT INTO accounts(name,channel,seller_id,color,sort,separate,business) VALUES('Aligoparts','ebay',NULL,'#B04A4A',10,1,'Aligoparts')")
         for k, v in DEFAULT_SETTINGS.items():
             con.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)", (k, json.dumps(v)))
         # First start: load the costs and SKU corrections agreed so far
