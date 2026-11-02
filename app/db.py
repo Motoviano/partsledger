@@ -99,8 +99,13 @@ def init():
         if "business" not in cols:
             con.execute("ALTER TABLE accounts ADD COLUMN business TEXT")
         con.execute("UPDATE accounts SET business='Motoviano Ltd' WHERE business IS NULL AND separate=0")
+        if "vat_rate" not in cols:
+            # VAT-registered accounts: sales, fees, ads and costs are shown without VAT (0 = not registered)
+            con.execute("ALTER TABLE accounts ADD COLUMN vat_rate REAL NOT NULL DEFAULT 0")
+            con.execute("UPDATE accounts SET vat_rate=0.2 WHERE name='Aligoparts'")
         if not con.execute("SELECT 1 FROM accounts WHERE name='Aligoparts'").fetchone():
             con.execute("INSERT INTO accounts(name,channel,seller_id,color,sort,separate,business) VALUES('Aligoparts','ebay',NULL,'#B04A4A',10,1,'Aligoparts')")
+            con.execute("UPDATE accounts SET vat_rate=0.2 WHERE name='Aligoparts'")
         for k, v in DEFAULT_SETTINGS.items():
             con.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)", (k, json.dumps(v)))
         # First start: load the costs and SKU corrections agreed so far

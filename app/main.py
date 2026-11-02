@@ -190,7 +190,7 @@ def data(request: Request):
         std_warn = SS.warning_count(con)
     return {"me": u, "asOf": last or uk_today(), "today": uk_today(),
             "accounts": [{"id": a["id"], "name": a["name"], "channel": a["channel"], "color": a["color"],
-                          "separate": bool(a.get("separate")), "business": a.get("business") or "",
+                          "separate": bool(a.get("separate")), "business": a.get("business") or "", "vat_rate": a.get("vat_rate") or 0,
                           "hasData": any(i[1] == a["id"] for i in items)} for a in accounts],
             "items": items, "overheads": overheads, "cogs": cogs, "settings": settings, "uploads": ups, "msgOpen": msg_open, "stdWarn": std_warn}
 
@@ -242,6 +242,9 @@ async def set_sku_map(request: Request):
         if sku:
             con.execute("INSERT INTO sku_map(item_id,sku,note) VALUES(?,?,?) ON CONFLICT(item_id) DO UPDATE SET sku=excluded.sku",
                         (item, sku, "set in app"))
+            # a cost already typed for this no-SKU listing moves to the new SKU (unless that SKU has its own cost)
+            if not con.execute("SELECT 1 FROM cogs WHERE sku=?", (sku,)).fetchone():
+                con.execute("UPDATE cogs SET sku=? WHERE sku=?", (sku, "No SKU #" + item))
         else:
             con.execute("DELETE FROM sku_map WHERE item_id=?", (item,))
     return {"ok": True}
@@ -413,7 +416,7 @@ def ebay_status(request: Request):
     with DB.db() as con:
         toks = {r["account_id"]: {**{k: r[k] for k in ("account_id", "ebay_user", "refresh_expires", "connected_at", "connected_by")},
                                   "traffic": EB.ANALYTICS_SCOPE in EB.granted(r)} for r in con.execute("SELECT * FROM ebay_tokens")}
-        accs = [dict(r) for r in con.execute("SELECT id,name,seller_id,color,separate,business FROM accounts WHERE channel='ebay' ORDER BY sort,id")]
+        accs = [dict(r) for r in con.execute("SELECT id,name,seller_id,color,separate,business,vat_rate FROM accounts WHERE channel='ebay' ORDER BY sort,id")]
         sync = {r["account_id"]: dict(r) for r in con.execute("SELECT * FROM sync_state")}
         gaps = {}
         for m in EB.missing_sales(con):
@@ -424,6 +427,20 @@ def ebay_status(request: Request):
         a["missing_items"] = gaps.get(a["id"], 0)
     return {"configured": EB.configured(), "missing": EB.missing_settings(), "accounts": accs,
             "callbackHint": (os.environ.get("PUBLIC_URL", "").rstrip("/") + "/ebay/callback") if os.environ.get("PUBLIC_URL") else None}
+
+
+@app.post("/api/accounts/{account_id}/vat")
+async def set_vat(account_id: int, request: Request):
+    """VAT registration per account: 0 = not registered, else the rate (0.2 = 20%)."""
+    need_admin(request)
+    b = await request.json()
+    rate = float(b.get("rate") or 0)
+    if not 0 <= rate < 1:
+        raise HTTPException(400, "VAT rate must be between 0% and 99%.")
+    with DB.db() as con:
+        if not con.execute("UPDATE accounts SET vat_rate=? WHERE id=?", (rate, account_id)).rowcount:
+            raise HTTPException(404, "Account not found.")
+    return {"ok": True}
 
 
 @app.get("/api/traffic")

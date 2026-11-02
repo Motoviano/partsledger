@@ -23,6 +23,17 @@ def group_of(sku: str) -> str:
     return m.group(1).upper() if m else "OTHER"
 
 
+def no_sku_key(item_id, title, book=None):
+    """Cost key for a product with no SKU on the marketplace: its item number, so the cost stays with the listing.
+    Older costs saved under the title are still found."""
+    old = "No SKU: " + (title or "")[:60]
+    if not item_id:
+        return old
+    if book is not None and old in book.hist and ("No SKU #" + str(item_id)) not in book.hist:
+        return old
+    return "No SKU #" + str(item_id)
+
+
 class CostBook:
     def __init__(self, con, settings):
         self.hist = defaultdict(list)
@@ -67,15 +78,27 @@ def build(con, settings):
             it, oh = _amazon(acc, rows)
         else:
             it, oh = _ebay(acc, rows)
+        vat = float(acc.get("vat_rate") or 0)
+        k = 1 / (1 + vat)
         for x in it:
             raw = x["sku_raw"]
             sku = sku_map.get(x["item_id"]) if x["item_id"] else None
-            sku = sku or raw or listing_sku.get((acc["id"], x["item_id"])) or ("No SKU: " + (x["title"] or "")[:60])
+            sku = sku or raw or listing_sku.get((acc["id"], x["item_id"])) or no_sku_key(x["item_id"], x["title"], book)
             unit_cost, src = book.cost(sku, x["date"], x["unit_price"])
             returned = x["order_sales"] > 0 and -x["order_refund_gross"] >= ret_share * x["order_sales"]
+            # VAT-registered: sales, refunds, fees and ads without VAT; the VAT itself is kept apart (it is in the payout
+            # but belongs to HMRC). Postage labels stay as charged. Costs are entered as paid (with VAT) and reclaimed.
+            s_, f_, a_, r_ = x["sales"] * k, x["fees"] * k, x["ads"] * k, x["ref"] * k
+            v_ = (x["sales"] + x["fees"] + x["ads"] + x["ref"]) - (s_ + f_ + a_ + r_)
             items.append([x["date"], acc["id"], x["order"], x["item_id"] or "", sku, group_of(sku), (x["title"] or "")[:100],
-                          x["qty"], round(x["sales"], 2), round(x["fees"], 2), round(x["ads"], 2), round(x["post"], 2),
-                          round(x["ref"], 2), round(unit_cost, 2), src, 1 if returned else 0])
+                          x["qty"], round(s_, 2), round(f_, 2), round(a_, 2), round(x["post"], 2),
+                          round(r_, 2), round(unit_cost * k, 2), src, 1 if returned else 0, round(v_, 2)])
+        for o in oh:
+            if vat and not o[2].startswith("Postage"):
+                ex = round(o[3] * k, 2)
+                o[:] = [o[0], o[1], o[2], ex, round(o[3] - ex, 2)]
+            else:
+                o.append(0.0)
         overheads += oh
     return accounts, items, overheads, book
 
@@ -184,18 +207,28 @@ def cogs_table(con, items, book):
     """One row per SKU: cost now, where it came from, price per eBay account, units sold."""
     acc_ids = [r["id"] for r in con.execute("SELECT id FROM accounts ORDER BY sort,id")]
     info = {}
+    sep = {r["id"] for r in con.execute("SELECT id FROM accounts WHERE separate=1")}
+    mapped = {r["item_id"]: r["sku"] for r in con.execute("SELECT item_id,sku FROM sku_map")}
     for r in con.execute("SELECT account_id,item_id,sku,title,price FROM listings"):
-        s = r["sku"] or None
+        s = mapped.get(r["item_id"]) or r["sku"] or None
         if not s:
-            continue
+            if r["account_id"] not in sep:
+                continue
+            s = no_sku_key(r["item_id"], r["title"], book)  # e.g. Aligoparts listings without a custom label
         d = info.setdefault(s, {"title": r["title"], "prices": {}})
+        d.setdefault("accs", set()).add(r["account_id"])
+        if s.startswith("No SKU #"):
+            d["item"] = r["item_id"]
         p = d["prices"].get(r["account_id"])
         if r["price"] is not None and (p is None or r["price"] < p):
             d["prices"][r["account_id"]] = r["price"]
     units = defaultdict(float)
     for x in items:
         units[x[4]] += x[7]
-        info.setdefault(x[4], {"title": x[6], "prices": {}})
+        d = info.setdefault(x[4], {"title": x[6], "prices": {}})
+        d.setdefault("accs", set()).add(x[1])
+        if x[4].startswith("No SKU #"):
+            d["item"] = x[3]
     for s in book.hist:
         info.setdefault(s, {"title": "", "prices": {}})
     out = []
@@ -214,5 +247,6 @@ def cogs_table(con, items, book):
             src = "Price band"
         out.append({"sku": s, "group": group_of(s), "title": d["title"] or "", "cost": cur[1] if cur else None,
                     "since": cur[0] if cur and cur[0] > "2000-01-01" else None, "changes": len(book.hist.get(s, [])),
-                    "source": src, "prices": prices, "units": units.get(s, 0)})
+                    "source": src, "prices": prices, "units": units.get(s, 0),
+                    "accs": sorted(d.get("accs") or []), "item": d.get("item")})
     return out

@@ -127,6 +127,7 @@ class Floors:
         tot = [sum(v[0] for v in fee.values()), sum(v[1] for v in fee.values())]
         self.default_fee = tot[1] / tot[0] if tot[0] > 0 else 0.13
         self.fee, self.post, self.gpost, self.book, self.min_profit = fee, post, gpost, book, min_profit
+        self.vat = {a["id"]: float(a.get("vat_rate") or 0) for a in accounts}
         self.ads = {(r["account_id"], r["item_id"]): r["rate"] or 0 for r in con.execute(
             "SELECT account_id,item_id,rate FROM ad_current WHERE funding='COST_PER_SALE'")} if con.execute(
             "SELECT name FROM sqlite_master WHERE name='ad_current'").fetchone() else {}
@@ -144,9 +145,11 @@ class Floors:
         k = 1 - fr - ad
         if k <= 0:
             return None, "Fees and ads take the whole price"
-        fl = math.ceil((self.min_profit + cost + po) / k * 100) / 100
-        self.last = (k, cost, po)
-        return fl, f"cost £{cost:.2f}{' (price band)' if src == 'P' else ''} · postage £{po:.2f} · fees {fr*100:.1f}% · ads {ad*100:.1f}%"
+        v = self.vat.get(account_id, 0)
+        cost = cost / (1 + v)  # VAT-registered: the VAT on the cost is reclaimed, and the price must cover the VAT owed
+        fl = math.ceil((self.min_profit + cost + po) / k * (1 + v) * 100) / 100
+        self.last = (k / (1 + v), cost, po)
+        return fl, f"cost £{cost:.2f}{' (price band)' if src == 'P' else ''}{' ex VAT' if v else ''} · postage £{po:.2f} · fees {fr*100:.1f}% · ads {ad*100:.1f}%{f' · VAT {v*100:g}%' if v else ''}"
 
 
 def plan(con, ids_by_account, s=None):

@@ -484,20 +484,21 @@
       <div class="panel">
         <div class="panel-head"><div><h2>Cost of goods</h2><p>One cost per SKU, used by every listing on every account.</p></div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <select id="cogsShow" aria-label="Show"><option value="">All SKUs</option><option value="need">Needs a cost</option><option value="band">Using a price band</option><option value="known">Has a cost</option></select>
+            <select id="cogsShow" aria-label="Show"><option value="">All SKUs</option><option value="need">Needs a cost</option><option value="band">Using a price band</option><option value="known">Has a cost</option><option value="nosku">No SKU on eBay</option></select>
             <input type="search" id="cogsSearch" placeholder="Search SKU or product" aria-label="Search costs"></div></div>
         <div class="rules">
           <div class="rule"><h3>Price bands (used when a SKU has no cost)</h3>
             <div class="band-grid" id="bandGrid"></div>
             <div style="margin-top:8px"><button class="btn" type="button" id="saveBands">Save bands</button></div></div>
           <div class="rule"><h3>Returns</h3><p>A full refund puts the COGS back, because the part comes back. The loss is postage and any eBay fees not refunded. Partial refunds and claims keep the COGS.</p></div>
-          <div class="rule"><h3>VAT</h3><p>Motoviano isn't VAT-registered, so profit uses the full sale price and costs include VAT.</p></div>
+          <div class="rule"><h3>VAT</h3><p>Motoviano isn't VAT-registered, so its profit uses the full sale price and costs include VAT. Aligoparts is VAT-registered: its sales, eBay fees, ads and costs are counted without VAT (change this per account on the eBay page).</p></div>
         </div>
         <div class="seg" role="radiogroup" aria-label="When a cost changes">
           <b>When I change a cost:</b>
           <label><input type="radio" name="cmode" value="all" checked> correct it for all sales</label>
           <label><input type="radio" name="cmode" value="from"> use it for sales from <input type="date" id="cFrom"></label>
         </div>
+        <p class="dt-note" id="cogsVat" hidden></p>
         <div class="tbl-wrap"><table id="cogsTable"></table></div>
       </div>
     </section>

@@ -81,9 +81,9 @@ const ohIn = (f, r) => f.allG ? OH.filter(x => x.d >= r[0] && x.d <= r[1] && f.a
 const cogsOf = x => x.q * x.uc, stockBack = x => x.ret ? cogsOf(x) : 0;
 const profitOf = x => x.s + x.fee + x.ad + x.po + x.rf - cogsOf(x) + stockBack(x);
 function totals(its, oh) {
-  const T = { sales: 0, orders: new Set(), units: 0, ret: 0, fee: 0, ad: 0, po: 0, rf: 0, cogs: 0, back: 0, gross: 0, oh: 0 };
-  its.forEach(x => { T.sales += x.s; T.orders.add(x.a + '|' + x.o); T.units += x.q; T.ret += x.ret; T.fee += x.fee; T.ad += x.ad; T.po += x.po; T.rf += x.rf; T.cogs += cogsOf(x); T.back += stockBack(x); T.gross += profitOf(x); });
-  oh.forEach(o => T.oh += o.v); T.net = T.gross + T.oh; T.orders = T.orders.size; return T;
+  const T = { sales: 0, orders: new Set(), units: 0, ret: 0, fee: 0, ad: 0, po: 0, rf: 0, cogs: 0, back: 0, gross: 0, oh: 0, vat: 0 };
+  its.forEach(x => { T.sales += x.s; T.orders.add(x.a + '|' + x.o); T.units += x.q; T.ret += x.ret; T.fee += x.fee; T.ad += x.ad; T.po += x.po; T.rf += x.rf; T.cogs += cogsOf(x); T.back += stockBack(x); T.gross += profitOf(x); T.vat += x.vat; });
+  oh.forEach(o => { T.oh += o.v; T.vat += o.vat; }); T.net = T.gross + T.oh; T.orders = T.orders.size; return T;
 }
 
 // ---------------------------------------------------------------- tiles
@@ -120,7 +120,8 @@ function renderTileMenu() {
   const sel = $('tileSet'); if (!sel) return;
   sel.innerHTML = Object.entries(TILESETS).map(([k, v]) => `<option value="${k}" ${k === tileSet ? 'selected' : ''}>${v[0]}</option>`).join('');
 }
-const payoutOf = T => T.sales + T.fee + T.ad + T.po + T.rf + T.oh;
+// payout = cash from the marketplace: for VAT-registered accounts this includes the VAT (owed to HMRC, not profit)
+const payoutOf = T => T.sales + T.fee + T.ad + T.po + T.rf + T.oh + (T.vat || 0);
 function tileTotals(k, f, lm, lmR) {
   const td = tileDef(k); let T, sub = td.r[0] === td.r[1] ? nice(td.r[0]) : `${nice(td.r[0])} – ${nice(td.r[1])}`;
     if (k === 'fc') {
@@ -134,7 +135,7 @@ function tileTotals(k, f, lm, lmR) {
       const lmDays = +lmR[1].slice(8, 10), left = +td.r[1].slice(8, 10) - +TODAY.slice(8, 10);
       const has14 = p14.sales !== 0, hasLm = lm.sales !== 0;
       const pace = p => has14 && hasLm ? (p14[p] / 14 + lm[p] / lmDays) / 2 : has14 ? p14[p] / 14 : hasLm ? lm[p] / lmDays : 0;
-      ['sales', 'units', 'orders', 'fee', 'ad', 'po', 'rf', 'cogs', 'back', 'gross', 'ret'].forEach(p => T[p] += pace(p) * left);
+      ['sales', 'units', 'orders', 'fee', 'ad', 'po', 'rf', 'cogs', 'back', 'gross', 'ret', 'vat'].forEach(p => T[p] += pace(p) * left);
       T.oh = Math.min(T.oh, lm.oh); T.net = T.gross + T.oh;
       sub += ' · pace from last 14 days and last month';
     } else T = totals(itemsIn(f, td.r), ohIn(f, td.r));
@@ -201,6 +202,7 @@ function tileDetail(k) {
   const notes = [];
   if (T.net > T.sales && T.oh > 0) notes.push(`Net profit is higher than sales because eBay paid back ${gbp(credits)} in this period (see Other fees). Those credits usually belong to earlier sales, for example a refunded fee or a cancelled postage label.`);
   if (pay < 0) notes.push(`The payout is negative because the other fees (${gbp(charges)}) are bigger than what these sales bring in. eBay takes them from the balance, so the next payout is smaller.`);
+  if (ACC.some(a => f.a.has(a.i) && a.vat_rate)) notes.push(`${ACC.filter(a => f.a.has(a.i) && a.vat_rate).map(a => esc(a.name)).join(', ')}: VAT-registered, so sales, refunds, eBay fees, ads and costs are shown without VAT. Postage labels are shown as charged.`);
   if (its.some(x => !x.id)) notes.push('Some sales are still waiting for item details from eBay. They are counted, with an estimated cost.');
   $('tdTitle').textContent = td.name; $('tdSub').textContent = sub;
   $('tdBody').innerHTML = (fc ? '<p class="dt-note">Estimate: what has sold so far this month plus the expected pace for the days left. The lists underneath show this month so far.</p>' : '') +
@@ -215,7 +217,8 @@ function tileDetail(k) {
     line('Product profit', T.gross, { cl: 'b' }) +
     line('Other fees and credits', T.oh, { tip: 'not tied to one sale', kids: ohRows.length ? ohRows : [['None in this period', 0]] }) +
     line('Net profit', T.net, { cl: 'b big' }) +
-    line('Payout (approx.)', pay, { cl: 'b', tip: 'what eBay pays out', kids: [['Sales', T.sales], ['Refunds', T.rf], ['eBay fees', T.fee], ['Ads', T.ad], ['Postage labels', T.po], ['Other fees and credits', T.oh], ['Payout', pay]] }) +
+    (Math.abs(T.vat) >= 0.005 ? line('VAT (owed to HMRC)', T.vat, { tip: 'VAT-registered accounts: VAT on sales less VAT on eBay fees and ads. Not profit', kids: byAcc('vat') }) : '') +
+    line('Payout (approx.)', pay, { cl: 'b', tip: 'what eBay pays out', kids: [['Sales', T.sales], ['Refunds', T.rf], ['eBay fees', T.fee], ['Ads', T.ad], ['Postage labels', T.po], ['Other fees and credits', T.oh], ...(Math.abs(T.vat) >= 0.005 ? [['VAT collected, less VAT reclaimed', T.vat]] : []), ['Payout', pay]] }) +
     `<div class="dt-kpis"><div><small>Margin</small><b>${pc(T.net / T.sales)}</b></div><div><small>ROI</small><b>${pc(T.net / cogsNet)}</b></div><div><small>Ads % of sales</small><b>${pc(-T.ad / T.sales)}</b></div><div><small>Return rate</small><b>${pc(refundUnits / T.units)}</b></div></div>` +
     (accs.length > 1 ? `<h3 class="dt-h">By account</h3><table class="dt-acc"><thead><tr><th class="l">Account</th><th>Sales</th><th>Payout</th><th>Net profit</th></tr></thead><tbody>${accs.map(x => `<tr><td class="l"><span class="dot" style="background:${x.a.color}"></span>${esc(x.a.name)}</td><td>${gbp(x.T.sales)}</td><td class="${cls(payoutOf(x.T))}">${gbp(payoutOf(x.T))}</td><td class="${cls(x.T.net)}">${gbp(x.T.net)}</td></tr>`).join('')}</tbody></table>` : '') +
     notes.map(n => `<p class="dt-note">${n}</p>`).join('') +
@@ -312,13 +315,18 @@ $('ordCsv').onclick = () => csv('sold-items.csv', ['Date', 'Account', 'Order', '
 const cogsState = { sort: { i: 0, asc: true }, render: renderCogs, empty: 'No SKUs match.' };
 function renderCogs() {
   const f = F(), q = $('cogsSearch').value.toLowerCase(), show = $('cogsShow').value;
-  const rows = COGS.filter(c => (f.allG || f.g.has(c.group)) && (!q || c.sku.toLowerCase().includes(q) || c.title.toLowerCase().includes(q)) &&
-    (!show || (show === 'need' && c.source === 'Needs cost') || (show === 'band' && c.cost == null && c.source !== 'Needs cost') || (show === 'known' && c.cost != null)));
+  // a SKU shows when it is listed or sold on a selected account (Aligoparts' own products only when Aligoparts is ticked)
+  const mainOn = ACC.some(a => !a.separate && f.a.has(a.i)), accOk = c => c.accs && c.accs.length ? c.accs.some(id => f.a.has(AIDX[id])) : mainOn;
+  const rows = COGS.filter(c => accOk(c) && (f.allG || f.g.has(c.group)) && (!q || c.sku.toLowerCase().includes(q) || c.title.toLowerCase().includes(q) || (c.item || '').includes(q)) &&
+    (!show || (show === 'need' && c.source === 'Needs cost') || (show === 'band' && c.cost == null && c.source !== 'Needs cost') || (show === 'known' && c.cost != null) || (show === 'nosku' && c.item)));
   const basis = c => c.cost != null ? `<span class="chip k">${esc(c.source)}</span>${c.since ? ` <span class="muted">since ${nice(c.since)}</span>` : ''}${c.changes > 1 ? ` <button class="link" type="button" data-hist="${esc(c.sku)}">${c.changes} changes</button>` : ''}`
     : c.source === 'Needs cost' ? '<span class="chip m">Needs a cost</span>' : `<span class="chip b">${esc(c.source)}</span>`;
-  const ebay = ACC.filter(a => a.channel === 'ebay');
+  const ebay = ACC.filter(a => a.channel === 'ebay' && f.a.has(a.i));
+  const vatAcc = ACC.filter(a => a.vat_rate && f.a.has(a.i));
+  $('cogsVat').hidden = !vatAcc.length;
+  $('cogsVat').textContent = vatAcc.length ? `Enter costs as you pay them, including VAT. For ${vatAcc.map(a => a.name).join(', ')} (VAT-registered) the VAT is taken off, because it is reclaimed. Products with no SKU on eBay are listed by item number: give them a SKU to share a cost across listings.` : '';
   const cols = [
-    { h: 'SKU', l: 1, v: c => c.sku, f: c => `<span class="sku">${esc(c.sku)}</span>` },
+    { h: 'SKU', l: 1, v: c => c.sku, f: c => c.item ? `<span class="chip m">No SKU</span> <span class="muted">item ${esc(c.item)}</span><br><button class="link" type="button" data-setsku="${esc(c.item)}">Give it a SKU</button>` : `<span class="sku">${esc(c.sku)}</span>` },
     { h: 'Group', l: 1, v: c => c.group, f: c => c.group },
     { h: 'Product', l: 1, cl: 'prod', v: c => c.title, f: c => `<span class="t">${esc(c.title)}</span>` },
     { h: 'Cost (£)', v: c => c.cost ?? -1, f: c => `<input class="cost-in" type="number" step="0.01" min="0" id="cost-${esc(c.sku)}" data-sku="${esc(c.sku)}" value="${c.cost ?? ''}" placeholder="band" aria-label="Cost for ${esc(c.sku)}">` },
@@ -332,6 +340,11 @@ function renderCogs() {
       await post('/api/cogs', { sku: inp.dataset.sku, cost: v === '' ? null : +v, mode, from: $('cFrom').value });
       toast(v === '' ? `Cost removed for ${inp.dataset.sku}` : `Saved ${gbp(+v)} for ${inp.dataset.sku}` + (mode === 'from' ? ` from ${nice($('cFrom').value)}` : '')); await load();
     } catch (e) { toast(e.message); }
+  });
+  document.querySelectorAll('[data-setsku]').forEach(b => b.onclick = () => {
+    const td = b.parentElement; td.innerHTML = `<input class="cell-in" style="width:130px" placeholder="New SKU" aria-label="SKU for item ${esc(b.dataset.setsku)}"> <button class="btn" type="button">Save</button>`;
+    const inp = td.querySelector('input'); inp.focus();
+    td.querySelector('button').onclick = async () => { const v = inp.value.trim(); if (!v) return; try { await post('/api/sku-map', { item_id: b.dataset.setsku, sku: v }); toast(`Item ${b.dataset.setsku} now has SKU ${v}`); await load(); } catch (e) { toast(e.message); } };
   });
   document.querySelectorAll('[data-hist]').forEach(b => b.onclick = async () => {
     const h = await api('/api/cogs/' + encodeURIComponent(b.dataset.hist) + '/history');
@@ -626,7 +639,8 @@ function edProfitFn() {
   const f = (r, price) => {
     const c = costAt(cmap, r.sku, price); if (!c) return null;
     const ad = r.ad != null ? r.ad / 100 : adIn;
-    return { p: price * (1 - R.fee(r.a) - ad) - c.c - R.post(r.sku, r.g), c, ad, fee: R.fee(r.a), post: R.post(r.sku, r.g) };
+    const v = 1 + ((ACC[r.a] && ACC[r.a].vat_rate) || 0); // VAT-registered: price and cost without VAT
+    return { p: price / v * (1 - R.fee(r.a) - ad) - c.c / v - R.post(r.sku, r.g), c, ad, fee: R.fee(r.a), post: R.post(r.sku, r.g) };
   };
   f.R = R; f.cmap = cmap; return f;
 }
@@ -1617,7 +1631,7 @@ async function renderEbay() {
   $('ebayAcc').innerHTML = `<thead><tr><th class="l">Account</th><th class="l">Status</th><th class="l">Login valid until</th><th class="l">Last sync</th><th></th></tr></thead><tbody>${EBS.accounts.map(a => {
     const c = a.connection, sy = a.sync;
     return `<tr><td class="l"><span class="dot" style="background:${a.color}"></span>${esc(a.name)}${a.separate ? ` <span class="chip b" title="Kept apart: not selected by default and left out of Stock sync">${esc(a.business || 'Separate')} · separate</span>` : ''}</td>
-      <td class="l">${c ? `<span class="chip k">Connected as ${esc(c.ebay_user)}</span>` : '<span class="chip m">Not connected</span>'}</td>
+      <td class="l">${c ? `<span class="chip k">Connected as ${esc(c.ebay_user)}</span>` : '<span class="chip m">Not connected</span>'}${ME.is_admin ? `<br><label class="muted" style="font-size:12px">VAT <select data-vat="${a.id}" aria-label="VAT registration for ${esc(a.name)}"><option value="0" ${a.vat_rate ? '' : 'selected'}>Not registered</option><option value="0.2" ${a.vat_rate === 0.2 ? 'selected' : ''}>Registered, 20%</option></select></label>` : a.vat_rate ? '<br><span class="muted">VAT-registered</span>' : ''}</td>
       <td class="l">${c && c.refresh_expires ? nice(c.refresh_expires) : '–'}</td>
       <td class="l prod">${sy && sy.last_tx_sync ? `${esc(sy.last_tx_sync.slice(0, 16))} UTC · ${sy.last_status === 'ok' ? '' : '<span class="chip m">Error</span> '}${esc(sy.last_message || '')}` : (c ? 'Waiting for first sync' : '–')}
         ${a.missing_items ? `<br><span class="chip ret">${n0(a.missing_items)} sales waiting for item details</span> <span class="muted">counted already; filled in at the next sync</span>` : ''}
@@ -1625,6 +1639,9 @@ async function renderEbay() {
       <td>${ME.is_admin ? `<a class="btn ${c && !c.traffic ? 'primary' : ''}" href="/ebay/connect/${a.id}">${c ? 'Reconnect' : 'Connect'}</a>${c ? ` <button class="link danger" type="button" data-disc="${a.id}">Disconnect</button>` : ''}` : ''}</td></tr>`;
   }).join('')}</tbody>`;
   $('syncNow').hidden = !EBS.accounts.some(a => a.connection);
+  document.querySelectorAll('[data-vat]').forEach(sel => sel.onchange = async () => {
+    try { await post(`/api/accounts/${sel.dataset.vat}/vat`, { rate: +sel.value }); toast(+sel.value ? 'Shown without VAT from now on (all dates)' : 'Shown with VAT included'); await load(); } catch (e) { toast(e.message); }
+  });
   document.querySelectorAll('[data-disc]').forEach(b => b.onclick = async () => {
     if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = 'Click again to disconnect'; return; }
     await api('/api/ebay/disconnect/' + b.dataset.disc, { method: 'POST' }); toast('Disconnected'); renderEbay();
@@ -2118,8 +2135,8 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => pa
 async function load() {
   D = await api('/api/data'); ME = D.me; TODAY = D.today;
   ACC = D.accounts.map((a, i) => ({ ...a, i })); AIDX = Object.fromEntries(ACC.map(a => [a.id, a.i]));
-  I = D.items.map(r => ({ d: r[0], a: AIDX[r[1]], o: r[2], id: r[3], sku: r[4], g: r[5], t: r[6], q: r[7], s: r[8], fee: r[9], ad: r[10], po: r[11], rf: r[12], uc: r[13], src: r[14], ret: r[15] }));
-  OH = D.overheads.map(r => ({ d: r[0], a: AIDX[r[1]], k: r[2], v: r[3] }));
+  I = D.items.map(r => ({ d: r[0], a: AIDX[r[1]], o: r[2], id: r[3], sku: r[4], g: r[5], t: r[6], q: r[7], s: r[8], fee: r[9], ad: r[10], po: r[11], rf: r[12], uc: r[13], src: r[14], ret: r[15], vat: r[16] || 0 }));
+  OH = D.overheads.map(r => ({ d: r[0], a: AIDX[r[1]], k: r[2], v: r[3], vat: r[4] || 0 }));
   D.minDate = I.reduce((m, x) => x.d < m ? x.d : m, D.asOf);
   const accIdx = Object.fromEntries(D.accounts.map((a, i) => [a.id, i]));
   COGS = D.cogs.map(c => ({ ...c, prices: Object.fromEntries(c.prices.map((p, i) => [i, p])) }));
