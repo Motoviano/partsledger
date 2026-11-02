@@ -233,8 +233,10 @@ $('tileDlg').addEventListener('click', e => { if (e.target === $('tileDlg')) $('
 // Loaded once after the main data (cached by the browser with an ETag). Each photo is a 64px version straight from
 // eBay's image servers, loaded lazily, so only the rows on screen fetch anything.
 let THM = { i: {}, s: {}, ready: false };
-const thUrl = (k, n) => k.startsWith('g:') ? `https://i.ebayimg.com/images/g/${k.slice(2)}/s-l${n}.jpg` : k.replace(/\/s-l\d+\./, `/s-l${n}.`).replace(/\$_\d+\.(jpe?g|png)/i, n > 100 ? '$_2.$1' : '$_14.$1');
+const thUrl = (k, n) => (k = k.replace(/^http:\/\//, 'https://'), k.startsWith('g:')) ? `https://i.ebayimg.com/images/g/${k.slice(2)}/s-l${n}.jpg` : k.replace(/\/s-l\d+\./, `/s-l${n}.`).replace(/\$_\d+\.(jpe?g|png)/i, n > 100 ? '$_2.$1' : '$_14.$1');
 function TH(id, sku) {
+  // products with no SKU on eBay are keyed 'No SKU #<item number>': their photo is found by that item number
+  if (!id && sku && String(sku).startsWith('No SKU #')) id = String(sku).slice(8);
   const k = (id && THM.i[id]) || (sku && THM.s[String(sku).toUpperCase()]);
   return k ? `<img class="th" src="${esc(thUrl(k, 64))}" srcset="${esc(thUrl(k, 140))} 2x" loading="lazy" decoding="async" width="40" height="40" alt="">` : THM.ready ? '<span class="th"></span>' : '';
 }
@@ -326,9 +328,9 @@ function renderCogs() {
   $('cogsVat').hidden = !vatAcc.length;
   $('cogsVat').textContent = vatAcc.length ? `Enter costs as you pay them, including VAT. For ${vatAcc.map(a => a.name).join(', ')} (VAT-registered) the VAT is taken off, because it is reclaimed. Products with no SKU on eBay are listed by item number: give them a SKU to share a cost across listings.` : '';
   const cols = [
-    { h: 'SKU', l: 1, v: c => c.sku, f: c => c.item ? `<span class="chip m">No SKU</span> <span class="muted">item ${esc(c.item)}</span><br><button class="link" type="button" data-setsku="${esc(c.item)}">Give it a SKU</button>` : `<span class="sku">${esc(c.sku)}</span>` },
+    { h: 'SKU', l: 1, v: c => c.sku, f: c => c.item ? `${TH(c.item)}<span class="chip m">No SKU</span> <span class="muted">item ${esc(c.item)}</span><br><button class="link" type="button" data-setsku="${esc(c.item)}">Give it a SKU</button>` : `<span class="sku">${esc(c.sku)}</span>` },
     { h: 'Group', l: 1, v: c => c.group, f: c => c.group },
-    { h: 'Product', l: 1, cl: 'prod', v: c => c.title, f: c => `<span class="t">${esc(c.title)}</span>` },
+    { h: 'Product', l: 1, cl: 'prod', v: c => c.title, f: c => `${c.item ? '' : TH(null, c.sku)}<span class="t">${esc(c.title)}</span>` },
     { h: 'Cost (£)', v: c => c.cost ?? -1, f: c => `<input class="cost-in" type="number" step="0.01" min="0" id="cost-${esc(c.sku)}" data-sku="${esc(c.sku)}" value="${c.cost ?? ''}" placeholder="band" aria-label="Cost for ${esc(c.sku)}">` },
     { h: 'Basis', l: 1, v: c => c.source, f: basis },
     ...ebay.map(a => ({ h: esc(a.name) + ' price', v: c => c.prices[a.i] ?? -1, f: c => c.prices[a.i] != null ? gbp(c.prices[a.i]) : '–' })),
