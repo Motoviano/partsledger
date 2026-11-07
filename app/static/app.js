@@ -1256,20 +1256,24 @@ function drawAds() {
   adShown = rows;
   $('adTable').querySelectorAll('.cell-in').forEach(inp => inp.addEventListener('change', () => {
     const v = inp.value === '' ? null : Math.round(+inp.value * 10) / 10;
-    if (v == null) adRateTyped.delete(inp.dataset.k); else adRateTyped.set(inp.dataset.k, v);
+    if (v == null) adRateTyped.delete(inp.dataset.k); else { adRateTyped.set(inp.dataset.k, v); adSetTick(inp.dataset.k, true); }
     drawAds();
   }));
   adSelCount();
 }
 let adShown = [];
-// "Start" (new ads) is opt-in; every other suggestion starts ticked
-const adTicked = r => (r.act === 'start' && !adRateTyped.has(r.k)) ? adOn.has(r.k) : !adOff.has(r.k);
+// Nothing is ticked until you tick it (or type a new rate), so only the listings you choose are changed
+const adTicked = r => adOn.has(r.k);
 function adSetTick(k, on) { if (on) { adOn.add(k); adOff.delete(k); } else { adOn.delete(k); adOff.add(k); } }
 function adChosen() {
   return adRowsCache.filter(r => adTicked(r) && (['stop', 'lower', 'raise', 'start'].includes(r.act) || adRateTyped.has(r.k)))
     .filter(r => adRateTyped.has(r.k) ? r.nr !== r.rate : true);
 }
-function adSelCount() { $('adSel').textContent = `${n0(adChosen().length)} ticked`; }
+function adSelCount() {
+  const ch = adChosen(), shown = new Set(adShown.map(r => r.k)), hidden = ch.filter(r => !shown.has(r.k)).length;
+  $('adSel').textContent = `${n0(ch.length)} ticked${hidden ? ` (${n0(hidden)} not in this view)` : ''}`;
+  $('adApply').textContent = ch.length ? `Apply ${n0(ch.length)} ticked to eBay` : 'Apply ticked to eBay';
+}
 function drawAdLog() {
   $('adLog').innerHTML = ADS.changes.length ? `<thead><tr><th class="l">When (UTC)</th><th class="l">Account</th><th class="l">Listing</th><th>Before</th><th>After</th><th class="l">Result</th></tr></thead><tbody>${ADS.changes.map(c => `<tr>
     <td class="l">${esc((c.at || '').slice(0, 16))}</td><td class="l">${esc(c.account || '')}</td><td class="l"><span class="sku">${esc(c.sku || '')}</span> <a href="https://www.ebay.co.uk/itm/${esc(c.item_id)}" target="_blank" rel="noopener">${esc(c.item_id)}</a></td>
@@ -1282,7 +1286,7 @@ $('adWin').addEventListener('change', renderAds2);
 $('adSearch').addEventListener('input', () => { adState.limit = 150; drawAds(); });
 $('adMore').onclick = () => { adState.limit += 300; drawAds(); };
 $('adTickAll').onclick = () => { adShown.forEach(r => adSetTick(r.k, true)); drawAds(); };
-$('adUntickAll').onclick = () => { adShown.forEach(r => adSetTick(r.k, false)); drawAds(); };
+$('adUntickAll').onclick = () => { adOn = new Set(); adOff = new Set(); drawAds(); toast('Everything unticked'); };
 $('adRefresh').onclick = async () => { try { await api('/api/ads/refresh', { method: 'POST' }); toast('Asking eBay for the latest ad report… this can take a few minutes'); setTimeout(renderAds2, 60000); } catch (e) { toast(e.message); } };
 $('adCsv').onclick = () => csv('promoted-listings.csv', ['Account', 'Item number', 'SKU', 'Title', 'Price', 'Rate now', 'Ad impressions', 'Ad clicks', 'Ad sales units', 'Ad sales £', 'Ad fees £', 'All units sold', 'Profit per ad sale', 'Highest safe rate', 'Suggestion', 'New rate', 'Why'],
   (adState.rows || []).map(r => [ACC[r.a].name, r.id, r.sku, r.t, r.price, r.rate ?? '', r.p ? r.p.imp : '', r.p ? r.p.clicks : '', r.adU, r.adS.toFixed(2), r.adF.toFixed(2), r.o.u, r.profitNow != null ? r.profitNow.toFixed(2) : '', r.maxRate ?? '', AD_ACT[r.act].name, r.nr ?? '', r.why]));
@@ -1290,11 +1294,11 @@ $('adApply').onclick = async () => {
   const b = $('adApply'), ch = adChosen();
   if (!ch.length) return toast('Nothing ticked to change.');
   const n = { stop: 0, rate: 0 }; ch.forEach(r => (r.act === 'stop' && !adRateTyped.has(r.k)) ? n.stop++ : n.rate++);
-  if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = `Click again: ${n.rate} rate changes${n.stop ? `, stop ${n.stop}` : ''}`; setTimeout(() => { b.dataset.sure = ''; b.textContent = 'Apply ticked to eBay'; }, 6000); return; }
-  b.dataset.sure = ''; b.textContent = 'Apply ticked to eBay';
+  if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = `Click again to send ${ch.length} listing${ch.length > 1 ? 's' : ''}: ${n.rate} rate changes${n.stop ? `, stop ${n.stop}` : ''}`; setTimeout(() => { b.dataset.sure = ''; adSelCount(); }, 6000); return; }
+  b.dataset.sure = '';
   try {
     const r = await post('/api/ads/apply', { changes: ch.map(x => ({ account_id: x.aid, item_id: x.id, sku: x.sku, action: x.act === 'stop' && !adRateTyped.has(x.k) ? 'stop' : 'rate', old_rate: x.rate, new_rate: x.nr })) });
-    toast(`Sending ${r.queued} changes to eBay…`); adRateTyped = new Map(); adOff = new Set(); adOn = new Set(); setTimeout(renderAds2, 2500);
+    toast(`Sending ${r.queued} changes to eBay…`); adRateTyped = new Map(); adOff = new Set(); adOn = new Set(); adSelCount(); setTimeout(renderAds2, 2500);
   } catch (e) { toast(e.message); }
 };
 
